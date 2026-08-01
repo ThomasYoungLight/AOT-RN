@@ -617,7 +617,7 @@ Everything before ran on RNTester's example registry or synthetic benchmarks. Th
 | profiled | 514 | 14.53 MB | 29.18 MB | 153–155 ms | 15–31 ms | 2–3.5 ms |
 | full | 809 | 16.80 MB | 31.45 MB | 159 ms | 19 ms | 2.3 ms |
 
-iPhone 15 Pro Max (full): TTI 112 ms, nav(detail) 12 ms, eval 1.9 ms, native=813.
+iPhone 15 Pro Max: full — TTI 112 ms, nav(detail) 12 ms, eval 1.9 ms, native=813, binary 24.18 MB; profiled (521/811) — TTI 108 ms, binary 21.56 MB (−2.62 MB), cold screens interpreted seamlessly.
 
 **Finding 1 — TTI is not where AOT pays.** All three variants land in the same 153–172 ms band (JS-side startup ≈ 73–92 ms once the constant API latency is subtracted). On flagship hardware, Hermes' lazy bytecode startup is already so good that ahead-of-time machine code does not move TTI measurably, even with the ENTIRE bundle native. (Low-end devices untested — the calculus may differ there.) This sharpens the architecture's value story: **AOT buys sustained JS work** (the reconciler benches: 1.6–1.9×), not startup; compile the framework's hot paths (ring 0) and profile-hot product code (ring 1), not the world for TTI's sake.
 
