@@ -1,17 +1,29 @@
 #!/usr/bin/env python3
-"""Registry codegen for the RN Metro-plugin pipeline (ring 0 = real port).
+"""Registry codegen for the RN Metro-plugin pipeline.
 
-ring 0 (core unit): the checksum-verified typed port of react-reconciler's
-    hot path (bench/reconciler/real/typed-port-core.ts) + shared benchmark,
-    registered under HybridReactCore.js's module id + content hash. The JS
-    twin in the bundle is the REAL react-reconciler.
-ring 1 (util unit): HybridUtil's transformed Metro factory compiled verbatim.
+ring 0 (core + fabriccore units): the checksum-verified typed port of
+    react-reconciler's hot path, registered under the JS twins' module ids +
+    content hashes (HybridReactCore.js benchmark twin, HybridFabricCore.js
+    live-Fabric twin).
+ring 1 (ring1 unit): POLICY-SELECTED product modules, transformed Metro
+    factories compiled verbatim (untyped). Every manifest module whose path
+    matches the include patterns (minus ring-0 modules) is probed with an
+    isolated shermes compile; the passes are batched into one unit, the
+    failures stay interpreted (they are ring 2 by construction).
 
-Pass --ios to also compile against the CocoaPods iOS hermes config.
+Units are PER-PLATFORM: Metro transforms differ between android and ios
+(Platform.OS inlining, .android/.ios variants), so each platform's units are
+keyed to that platform's own manifest hashes. Pass --ios to also build the
+iOS units (requires hybrid-manifest-ios.json + the CocoaPods hermes config).
+
+ONLY run this through orchestrate.py — a registry compiled against a stale
+manifest silently unbinds every unit (Experiments 11 and 13 both hit this).
 """
+import concurrent.futures
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -19,7 +31,7 @@ ROOT = pathlib.Path(__file__).resolve().parent
 RN = ROOT.parent.parent / "react-native"
 H = ROOT.parent.parent / "hermes"
 REAL = ROOT.parent / "reconciler" / "real"
-MANIFEST = RN / "packages" / "rn-tester" / "build" / "hybrid-manifest.json"
+BUILD = RN / "packages" / "rn-tester" / "build"
 OUT = ROOT / "out" / "rn"
 OUT.mkdir(parents=True, exist_ok=True)
 
@@ -35,10 +47,35 @@ NDK_CC = pathlib.Path.home() / (
     "darwin-x86_64/bin/aarch64-linux-android24-clang"
 )
 
-manifest = json.loads(MANIFEST.read_text())
+SHERMES = H / "build_release" / "bin" / "shermes"
+PROBE_DIR = OUT / "ring1-probe"
+PROBE_DIR.mkdir(parents=True, exist_ok=True)
+
+# --- ring-1 selection policy ---
+# Product code (the app's own modules). Framework/node_modules stay out by
+# default: RN core is ring-0 territory (typed ports), and the two ring-0
+# twins must never be double-registered.
+RING1_INCLUDE = [re.compile(r"^js/")]
+RING1_EXCLUDE = [
+    re.compile(r"^js/hybrid/HybridReactCore\.js$"),
+    re.compile(r"^js/hybrid/HybridFabricCore\.js$"),
+]
+
+# probe results cached by content hash: most modules transform identically on
+# both platforms and only need one probe.
+_probe_cache = {}
 
 
-def find(path_suffix):
+def load_manifest(platform):
+    p = BUILD / f"hybrid-manifest-{platform}.json"
+    if not p.exists() and platform == "android":
+        p = BUILD / "hybrid-manifest.json"  # legacy single-platform name
+    if not p.exists():
+        sys.exit(f"{p} missing — run the {platform} bundle pass first (orchestrate.py)")
+    return json.loads(p.read_text())
+
+
+def find(manifest, path_suffix):
     for mod_id, entry in manifest.items():
         if entry["path"].endswith(path_suffix):
             return mod_id, entry
@@ -50,29 +87,66 @@ def factory_expr(code):
     return code[len("__d("):].rstrip()[:-len(");")]
 
 
-util_id, util = find("js/hybrid/HybridUtil.js")
-core_id, core = find("js/hybrid/HybridReactCore.js")
-fabric_id, fabric = find("js/hybrid/HybridFabricCore.js")
-print(f"util: id={util_id} hash={util['hash'][:10]}…")
-print(f"core: id={core_id} hash={core['hash'][:10]}… ({core['path']})")
-print(f"fabric: id={fabric_id} hash={fabric['hash'][:10]}… ({fabric['path']})")
+def probe_one(item):
+    """Isolated untyped shermes compile of one factory; returns (id, ok, reason)."""
+    mod_id, entry = item
+    cached = _probe_cache.get(entry["hash"])
+    if cached is not None:
+        return mod_id, cached[0], cached[1]
+    src = PROBE_DIR / f"m{mod_id}.js"
+    src.write_text("var __f = " + factory_expr(entry["code"]) + ";\n")
+    r = subprocess.run(
+        [str(SHERMES), "-O", "-c", str(src), "-o", os.devnull],
+        capture_output=True, text=True,
+    )
+    src.unlink()
+    ok = r.returncode == 0
+    reason = "" if ok else (r.stderr.strip().splitlines() or ["?"])[0]
+    _probe_cache[entry["hash"]] = (ok, reason)
+    return mod_id, ok, reason
 
-# --- ring 1 ---
-registry_util = f"""'use strict';
-(function () {{
-  var g = globalThis;
-  var manifest = g.__nativeModules || (g.__nativeModules = {{}});
-  manifest[{util_id}] = {{
-    hash: '{util["hash"]}',
-    path: '{util["path"]}',
-    factory: {factory_expr(util["code"])}
-  }};
-}})();
-"""
-(OUT / "registry-util-rn.js").write_text(registry_util)
 
-# --- ring 0: assemble typed unit from the real-port sources ---
-prelude = """'use strict';
+def build_ring1_source(manifest, platform):
+    candidates = [
+        (mod_id, entry)
+        for mod_id, entry in manifest.items()
+        if any(rx.search(entry["path"]) for rx in RING1_INCLUDE)
+        and not any(rx.search(entry["path"]) for rx in RING1_EXCLUDE)
+    ]
+    print(f"ring1[{platform}]: {len(candidates)} candidates under policy "
+          f"{[rx.pattern for rx in RING1_INCLUDE]}")
+    passed, failed = [], []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        for mod_id, ok, reason in ex.map(probe_one, candidates):
+            (passed if ok else failed).append((mod_id, reason))
+    by_id = dict(candidates)
+    print(f"ring1[{platform}]: probe passed={len(passed)} failed={len(failed)}")
+    fail_reasons = {}
+    for mod_id, reason in failed:
+        key = re.sub(r"^.*error: ", "", reason)[:80]
+        fail_reasons.setdefault(key, []).append(by_id[mod_id]["path"])
+    for key, paths in sorted(fail_reasons.items(), key=lambda kv: -len(kv[1])):
+        print(f"  ring1 skip ({len(paths)}x): {key}   e.g. {paths[0]}")
+
+    parts = ["'use strict';\n(function () {\n"
+             "  var g = globalThis;\n"
+             "  var manifest = g.__nativeModules || (g.__nativeModules = {});\n"]
+    for mod_id, _ in passed:
+        entry = by_id[mod_id]
+        parts.append(
+            f"  manifest[{mod_id}] = {{\n"
+            f"    hash: '{entry['hash']}',\n"
+            f"    path: '{entry['path']}',\n"
+            f"    factory: {factory_expr(entry['code'])}\n"
+            f"  }};\n"
+        )
+    parts.append("})();\n")
+    src = OUT / f"registry-ring1-rn-{platform}.js"
+    src.write_text("".join(parts))
+    return src, len(passed)
+
+
+PRELUDE = """'use strict';
 const G: any = globalThis;
 function mkList(): any {
   return new G.Array();
@@ -90,33 +164,41 @@ function coerceInt(n: number): number {
   return n | 0;
 }
 """
-body = (REAL / "rn-core-typed-body.template.ts").read_text()
-body = body.replace("__CORE_HASH__", core["hash"])
-body = body.replace("__CORE_PATH__", core["path"])
-body = body.replace("__CORE_ID__", str(core_id))
-typed_unit = (
-    prelude
-    + (REAL / "host-config.inc.js").read_text()
-    + (REAL / "typed-port-core.ts").read_text()
-    + (REAL / "feed-app.inc.js").read_text()
-    + body
-)
-(OUT / "registry-core-rn.ts").write_text(typed_unit)
 
-# --- ring 0, fabric flavor: typed persistent reconciler bound to
-# nativeFabricUIManager, keyed to the HybridFabricCore twin's hash ---
-fbody = (REAL / "fabric-core-typed-body.template.ts").read_text()
-fbody = fbody.replace("__FABRIC_HASH__", fabric["hash"])
-fbody = fbody.replace("__FABRIC_PATH__", fabric["path"])
-fbody = fbody.replace("__FABRIC_ID__", str(fabric_id))
-fcore = (REAL / "typed-port-core.ts").read_text()
-fcore = fcore.replace("const supportsMutation = true;", "const supportsMutation = false;")
-fcore = fcore.replace("const supportsPersistence = false;", "const supportsPersistence = true;")
-fdiff = "\n".join(
-    l for l in (REAL / "diffprops-typed-body.ts").read_text().splitlines()
-    if not l.startswith("dpRunWorkload(")
-)
-faliases = """
+
+def build_core_source(manifest, platform):
+    core_id, core = find(manifest, "js/hybrid/HybridReactCore.js")
+    print(f"core[{platform}]: id={core_id} hash={core['hash'][:10]}…")
+    body = (REAL / "rn-core-typed-body.template.ts").read_text()
+    body = body.replace("__CORE_HASH__", core["hash"])
+    body = body.replace("__CORE_PATH__", core["path"])
+    body = body.replace("__CORE_ID__", str(core_id))
+    src = OUT / f"registry-core-rn-{platform}.ts"
+    src.write_text(
+        PRELUDE
+        + (REAL / "host-config.inc.js").read_text()
+        + (REAL / "typed-port-core.ts").read_text()
+        + (REAL / "feed-app.inc.js").read_text()
+        + body
+    )
+    return src
+
+
+def build_fabric_source(manifest, platform):
+    fabric_id, fabric = find(manifest, "js/hybrid/HybridFabricCore.js")
+    print(f"fabric[{platform}]: id={fabric_id} hash={fabric['hash'][:10]}…")
+    fbody = (REAL / "fabric-core-typed-body.template.ts").read_text()
+    fbody = fbody.replace("__FABRIC_HASH__", fabric["hash"])
+    fbody = fbody.replace("__FABRIC_PATH__", fabric["path"])
+    fbody = fbody.replace("__FABRIC_ID__", str(fabric_id))
+    fcore = (REAL / "typed-port-core.ts").read_text()
+    fcore = fcore.replace("const supportsMutation = true;", "const supportsMutation = false;")
+    fcore = fcore.replace("const supportsPersistence = false;", "const supportsPersistence = true;")
+    fdiff = "\n".join(
+        l for l in (REAL / "diffprops-typed-body.ts").read_text().splitlines()
+        if not l.startswith("dpRunWorkload(")
+    )
+    faliases = """
 function fhDiff(prevProps: any, nextProps: any, validAttributes: any): any {
   return tDiffProperties(null, prevProps, nextProps, validAttributes);
 }
@@ -124,23 +206,25 @@ function fhCreate(props: any, validAttributes: any): any {
   return tAddNestedProperty(null, props, validAttributes);
 }
 """
-fabric_unit = (
-    prelude
-    + fdiff
-    + faliases
-    + (REAL / "fabric-host.inc.js").read_text()
-    + fcore
-    + (REAL / "fabric-app.inc.js").read_text()
-    + fbody
-)
-(OUT / "registry-fabric-rn.ts").write_text(fabric_unit)
-
-
-def shermes(args, cfg):
-    cflags = (
-        f"-O3 -DNDEBUG -fno-strict-aliasing -fno-strict-overflow -I{cfg} -I{H}/include"
+    src = OUT / f"registry-fabric-rn-{platform}.ts"
+    src.write_text(
+        PRELUDE
+        + fdiff
+        + faliases
+        + (REAL / "fabric-host.inc.js").read_text()
+        + fcore
+        + (REAL / "fabric-app.inc.js").read_text()
+        + fbody
     )
-    cmd = [str(H / "build_release" / "bin" / "shermes")] + args
+    return src
+
+
+def shermes_android(args):
+    cflags = (
+        f"-O3 -DNDEBUG -fno-strict-aliasing -fno-strict-overflow "
+        f"-I{CFG_ANDROID} -I{H}/include"
+    )
+    cmd = [str(SHERMES)] + args
     print("+", " ".join(cmd))
     subprocess.run(cmd, check=True, env={**os.environ, "CC": str(NDK_CC), "CFLAGS": cflags})
 
@@ -157,24 +241,28 @@ def shermes_ios(args):
         f"-target arm64-apple-ios15.1 -isysroot {sdk} -O3 -DNDEBUG "
         f"-fno-strict-aliasing -fno-strict-overflow -I{CFG_IOS} -I{H}/include"
     )
-    cmd = [str(H / "build_release" / "bin" / "shermes")] + args
+    cmd = [str(SHERMES)] + args
     print("+ [ios]", " ".join(cmd))
     subprocess.run(cmd, check=True, env={**os.environ, "CC": cc, "CFLAGS": cflags})
 
 
-shermes(["-typed", "-O", "-c", "-exported-unit=core",
-         str(OUT / "registry-core-rn.ts"), "-o", str(OUT / "core_unit_rn.o")], CFG_ANDROID)
-shermes(["-typed", "-O", "-c", "-exported-unit=fabriccore",
-         str(OUT / "registry-fabric-rn.ts"), "-o", str(OUT / "fabric_unit_rn.o")], CFG_ANDROID)
-shermes(["-O", "-c", "-exported-unit=util",
-         str(OUT / "registry-util-rn.js"), "-o", str(OUT / "util_unit_rn.o")], CFG_ANDROID)
+def build_platform(platform, compile_fn, suffix):
+    manifest = load_manifest(platform)
+    core_src = build_core_source(manifest, platform)
+    fabric_src = build_fabric_source(manifest, platform)
+    ring1_src, ring1_count = build_ring1_source(manifest, platform)
+    compile_fn(["-typed", "-O", "-c", "-exported-unit=core",
+                str(core_src), "-o", str(OUT / f"core_unit_rn{suffix}.o")])
+    compile_fn(["-typed", "-O", "-c", "-exported-unit=fabriccore",
+                str(fabric_src), "-o", str(OUT / f"fabric_unit_rn{suffix}.o")])
+    compile_fn(["-O", "-c", "-exported-unit=ring1",
+                str(ring1_src), "-o", str(OUT / f"ring1_unit_rn{suffix}.o")])
+    size = (OUT / f"ring1_unit_rn{suffix}.o").stat().st_size // 1024
+    print(f"ring1_unit_rn{suffix}.o: {size} KB, {ring1_count} modules")
 
+
+build_platform("android", shermes_android, "")
 if "--ios" in sys.argv:
-    shermes_ios(["-typed", "-O", "-c", "-exported-unit=core",
-                 str(OUT / "registry-core-rn.ts"), "-o", str(OUT / "core_unit_rn_ios.o")])
-    shermes_ios(["-typed", "-O", "-c", "-exported-unit=fabriccore",
-                 str(OUT / "registry-fabric-rn.ts"), "-o", str(OUT / "fabric_unit_rn_ios.o")])
-    shermes_ios(["-O", "-c", "-exported-unit=util",
-                 str(OUT / "registry-util-rn.js"), "-o", str(OUT / "util_unit_rn_ios.o")])
+    build_platform("ios", shermes_ios, "_ios")
 
 print("done:", OUT)

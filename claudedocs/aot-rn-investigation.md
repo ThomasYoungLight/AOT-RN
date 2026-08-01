@@ -536,6 +536,22 @@ The ratio is lower than the host-only 1.87× because each commit now includes Fa
 
 Artifacts: `bench/reconciler/real/{fabric-host.inc.js, fabric-app.inc.js, fabric-core-js-body.js, fabric-core-typed-body.template.ts, build-fabric-twin.sh}`; glue `packages/rn-tester/js/HybridFabricDemo.js`; third SHUnit (`fabriccore`) in `ReactInstance.cpp`/CMake/xcconfig; fabric unit assembly in `build-rn-registry.py`. Host-op signatures gained instance/fiber params (`diffHostProps(old, new, inst)`, `hcCreateInstance(type, props, fiber)`, `hcCreateTextInstance(text, fiber)`) — both equivalence gates re-verified after the change (4174768215 mutation, 2635835858 persistent).
 
+### Experiment 14 (2026-08-02): hash-per-`__d`-call encoding + ring-1 selection policy
+
+Two production-shape upgrades to the dispatch pipeline, both validated on-device on both phones.
+
+**1. Hash per `__d` call.** The `__moduleHashes` table is gone: the serializer now appends each module's content hash as a trailing argument to that module's own `__d(factory, id, deps, hash)` call, and the dispatch prelude reads it from the call. A module is now self-describing under module-level delivery — OTA patches and delta/HMR bundles ship bare `__d` calls without the bundle prelude, and the native-vs-interpreted decision still works. All 796 RNTester modules carry their hash inline; no bundle-global state beyond the wrapper itself.
+
+**2. Ring-1 selection policy.** Ring 1 is no longer a hardcoded module: `build-rn-registry.py` applies a policy (`^js/` — the app's product code — minus the two ring-0 twins) over the manifest, **probes every candidate with an isolated untyped shermes compile** (8-way parallel, results cached by content hash), batches the passes into a single `ring1` SHUnit, and leaves failures interpreted (ring 2 by construction). On RNTester: **257/257 Android and 264/264 iOS candidates compile** — zero probe failures across the entire app, ~2 MB of transformed JS per platform → 6.5 MB (Android) / 7.0 MB (iOS) of `.o`. The formerly hardcoded `HybridUtil` unit is retired; it now flows through the policy like any other app module.
+
+On device: **Android native=259, iOS native=266, zero shadowed** — every eligible module dispatches to its compiled factory; the app boots clean and the live Fabric surface is unaffected (0.359 / 0.147 ms/commit, typed). Single-module OTA within ring 1 verified end-to-end: editing one app module (`HybridUtil.js` → `util-v2-OTA`) flipped exactly that module to `shadowed-ota-changed=1` running its **updated** interpreted code, while the other 258 stayed native.
+
+**Finding: ring-1 units must be per-platform.** The first iOS run (units compiled from the Android manifest) showed 28 of 245 modules correctly fail-safed to interpreted — Metro transforms are platform-specific (`Platform.OS` inlining, `.android`/`.ios` variants), so hashes legitimately differ. The pipeline now does two bundle passes (`hybrid-manifest-android.json` / `hybrid-manifest-ios.json`) and compiles each platform's units against its own manifest; the probe cache keeps the double pass cheap. This also re-demonstrated the fail-safe doing its job on *legitimately different* content, not just OTA edits.
+
+Open cost question (unmeasured): startup evaluation of the 6.5 MB ring-1 unit and its binary-size impact vs the interpreter's lazy bytecode — a production policy would likely rank modules by hotness/size instead of compiling everything that passes the probe; the knobs are in place (`RING1_INCLUDE`/`RING1_EXCLUDE`).
+
+Artifacts: per-call hash in `hybrid-serializer.js`; policy/probe/per-platform units in `build-rn-registry.py`; per-platform manifest passes in `orchestrate.py`; `ring1` SHUnit replaces `util` in `ReactInstance.cpp`/CMake/xcconfig; grouped dispatch log in `HybridAOTDemo.js`.
+
 ### Rejected alternatives
 
 - **Dual engine / native core + JS islands** (Valdi-style): two heaps, serialization at every boundary, function-identity hazards.

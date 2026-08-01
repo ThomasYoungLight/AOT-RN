@@ -1,7 +1,7 @@
 From 4709e32b34d229e0805d679b6fb916bf4161af96 Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 00:28:57 +0800
-Subject: [PATCH 1/2] Hybrid AOT prototype: SHUnit ring dispatch in RN
+Subject: [PATCH 1/3] Hybrid AOT prototype: SHUnit ring dispatch in RN
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -6784,7 +6784,7 @@ index 9546a3b..1a95bf5 100644
 From 90c186ac1d579ad45326e2a4e9e7a78ce3da1ce7 Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 01:35:19 +0800
-Subject: [PATCH 2/2] Live Fabric surface driven by the hybrid ring-0
+Subject: [PATCH 2/3] Live Fabric surface driven by the hybrid ring-0
  reconciler
 
 HybridFabricDemo takes over the RNTester root surface and binds the ring-0
@@ -13091,6 +13091,209 @@ index 3b5031b..ddd11e6 100644
    hostStats.creates = 0;
    hostStats.textCreates = 0;
    hostStats.appends = 0;
+-- 
+2.50.1 (Apple Git-155)
+
+
+From cca4e6fc09f7531dc6462fe92024c2f52c4f38cf Mon Sep 17 00:00:00 2001
+From: Thomas <thomas.wang@ponyft.com>
+Date: Sun, 2 Aug 2026 02:05:18 +0800
+Subject: [PATCH 3/3] Hash-per-__d-call dispatch + policy-selected ring-1 unit
+
+The serializer appends each module's content hash to its own __d call (no
+central __moduleHashes table) so modules stay self-describing under
+module-level delivery. The ring1 SHUnit replaces the hardcoded util unit:
+policy-selected app modules, compile-probed and batched per platform.
+Android native=259, iOS native=266, zero shadowed; single-module OTA
+verified (1 edited module shadowed, 258 stay native).
+
+
+---
+ .../ReactAndroid/src/main/jni/CMakeLists.txt  |  4 +-
+ .../react/runtime/ReactInstance.cpp           | 10 ++--
+ packages/rn-tester/hybrid-serializer.js       | 46 ++++++++++++-------
+ packages/rn-tester/js/HybridAOTDemo.js        | 19 +++++++-
+ 4 files changed, 53 insertions(+), 26 deletions(-)
+
+diff --git a/packages/react-native/ReactAndroid/src/main/jni/CMakeLists.txt b/packages/react-native/ReactAndroid/src/main/jni/CMakeLists.txt
+index d9d9537..dc9389d 100644
+--- a/packages/react-native/ReactAndroid/src/main/jni/CMakeLists.txt
++++ b/packages/react-native/ReactAndroid/src/main/jni/CMakeLists.txt
+@@ -266,11 +266,11 @@ target_merge_so(reactnative)
+ set(RN_HYBRID_SHUNIT_DIR "/Users/bm/Documents/code/AOT-RN/bench/hybrid/out/rn")
+ if(ANDROID_ABI STREQUAL "arm64-v8a"
+    AND EXISTS "${RN_HYBRID_SHUNIT_DIR}/core_unit_rn.o"
+-   AND EXISTS "${RN_HYBRID_SHUNIT_DIR}/util_unit_rn.o")
++   AND EXISTS "${RN_HYBRID_SHUNIT_DIR}/ring1_unit_rn.o")
+   message(STATUS "Hybrid AOT: linking registry SHUnits from ${RN_HYBRID_SHUNIT_DIR}")
+   target_sources(reactnative PRIVATE
+           "${RN_HYBRID_SHUNIT_DIR}/core_unit_rn.o"
+-          "${RN_HYBRID_SHUNIT_DIR}/util_unit_rn.o")
++          "${RN_HYBRID_SHUNIT_DIR}/ring1_unit_rn.o")
+   if(EXISTS "${RN_HYBRID_SHUNIT_DIR}/fabric_unit_rn.o")
+     target_sources(reactnative PRIVATE
+             "${RN_HYBRID_SHUNIT_DIR}/fabric_unit_rn.o")
+diff --git a/packages/react-native/ReactCommon/react/runtime/ReactInstance.cpp b/packages/react-native/ReactCommon/react/runtime/ReactInstance.cpp
+index 897d4f5..1881e7f 100644
+--- a/packages/react-native/ReactCommon/react/runtime/ReactInstance.cpp
++++ b/packages/react-native/ReactCommon/react/runtime/ReactInstance.cpp
+@@ -36,8 +36,8 @@
+ #define HYBRID_WEAK __attribute__((weak))
+ #endif
+ extern "C" HYBRID_WEAK SHUnit* sh_export_core(void);
+-extern "C" HYBRID_WEAK SHUnit* sh_export_util(void);
+ extern "C" HYBRID_WEAK SHUnit* sh_export_fabriccore(void);
++extern "C" HYBRID_WEAK SHUnit* sh_export_ring1(void);
+ 
+ namespace facebook::react {
+ 
+@@ -289,7 +289,7 @@ void ReactInstance::loadScript(
+         // Hybrid AOT prototype: evaluate registry SHUnits BEFORE the bundle
+         // so its __d prelude can dispatch per module by content hash. This is
+         // additive: the bundle still evaluates normally below.
+-        if (sh_export_core != nullptr || sh_export_util != nullptr ||
++        if (sh_export_core != nullptr || sh_export_ring1 != nullptr ||
+             sh_export_fabriccore != nullptr) {
+           if (auto* hybridAPI = jsi::castInterface<hermes::IHermes>(&runtime)) {
+             // Reliable log channel for the demo (RCTLog is compiled out in
+@@ -313,9 +313,9 @@ void ReactInstance::loadScript(
+               LOG(WARNING) << "ReactInstance: hybrid AOT evaluateSHUnit(core)";
+               hybridAPI->evaluateSHUnit(sh_export_core);
+             }
+-            if (sh_export_util != nullptr) {
+-              LOG(WARNING) << "ReactInstance: hybrid AOT evaluateSHUnit(util)";
+-              hybridAPI->evaluateSHUnit(sh_export_util);
++            if (sh_export_ring1 != nullptr) {
++              LOG(WARNING) << "ReactInstance: hybrid AOT evaluateSHUnit(ring1)";
++              hybridAPI->evaluateSHUnit(sh_export_ring1);
+             }
+             if (sh_export_fabriccore != nullptr) {
+               LOG(WARNING)
+diff --git a/packages/rn-tester/hybrid-serializer.js b/packages/rn-tester/hybrid-serializer.js
+index 3a34e85..fcf746f 100644
+--- a/packages/rn-tester/hybrid-serializer.js
++++ b/packages/rn-tester/hybrid-serializer.js
+@@ -5,18 +5,19 @@
+  *  1. Stable, content-independent module IDs (sha1 of project-relative path,
+  *     truncated to 32 bits) so the native manifest baked into the app binary
+  *     stays valid across OTA bundle rebuilds.
+- *  2. A `__moduleHashes` table (sha256 of each module's transformed factory
+- *     code) plus a `__d` wrapper that dispatches a module to a native factory
+- *     from `global.__nativeModules` when the hashes match, and falls back to
+- *     the bundle's JS factory when they don't (OTA-changed) or no native
+- *     build exists.
++ *  2. A content hash (sha256 of each module's transformed factory code)
++ *     appended as an extra argument to that module's own `__d` call, plus a
++ *     `__d` wrapper that dispatches a module to a native factory from
++ *     `global.__nativeModules` when the hashes match, and falls back to the
++ *     bundle's JS factory when they don't (OTA-changed) or no native build
++ *     exists. Carrying the hash per call (not in a central table) keeps a
++ *     module self-describing under module-level delivery: OTA patches and
++ *     delta/HMR bundles ship `__d` calls without the bundle prelude, and the
++ *     dispatch check still works.
+  *  3. A `hybrid-manifest.json` build artifact: {id: {hash, path, code}} for
+  *     every module, consumed by the registry codegen that shermes-compiles
+  *     selected modules into SHUnits linked into the app binary.
+  *
+- * A production version would embed the hash into each __d call instead of a
+- * separate table; the table keeps this prototype non-invasive.
+- *
+  * @format
+  * @noflow
+  */
+@@ -76,23 +77,19 @@ function contentHash(code) {
+   return crypto.createHash('sha256').update(code).digest('hex');
+ }
+ 
+-function buildDispatchPrelude(hashes) {
++function buildDispatchPrelude() {
+   return (
+     '(function (g) {\n' +
+     "  'use strict';\n" +
+-    '  var hashes = ' +
+-    JSON.stringify(hashes) +
+-    ';\n' +
+-    '  g.__moduleHashes = hashes;\n' +
+     '  var orig = g.__d;\n' +
+     '  if (typeof orig !== "function") { return; }\n' +
+     '  var bindings = {};\n' +
+     '  g.__hybridBindings = bindings;\n' +
+-    '  g.__d = function (factory, id, deps) {\n' +
++    '  g.__d = function (factory, id, deps, hash) {\n' +
+     '    var native = g.__nativeModules;\n' +
+-    '    var n = native ? native[id] : null;\n' +
++    '    var n = native && hash != null ? native[id] : null;\n' +
+     '    if (n) {\n' +
+-    '      if (n.hash === hashes[id]) {\n' +
++    '      if (n.hash === hash) {\n' +
+     "        bindings[id] = {binding: 'native', path: n.path};\n" +
+     '        return orig(n.factory, id, deps);\n' +
+     '      }\n' +
+@@ -104,6 +101,17 @@ function buildDispatchPrelude(hashes) {
+   );
+ }
+ 
++// `bundle.modules` entries are complete `__d(factory, id, deps)` calls at
++// this point (processModules already added the params); append this module's
++// own hash as a trailing argument.
++function addHashToDefineCall(code, hash) {
++  const idx = code.lastIndexOf(')');
++  if (idx === -1) {
++    throw new Error('hybrid-serializer: module code has no define call');
++  }
++  return code.slice(0, idx) + ',"' + hash + '"' + code.slice(idx);
++}
++
+ function customSerializer(entryPoint, preModules, graph, options) {
+   const manifest = {};
+   const hashes = {};
+@@ -129,7 +137,11 @@ function customSerializer(entryPoint, preModules, graph, options) {
+   fs.writeFileSync(MANIFEST_OUT, JSON.stringify(manifest, null, 1));
+ 
+   const bundle = baseJSBundle(entryPoint, preModules, graph, options);
+-  bundle.pre += '\n' + buildDispatchPrelude(hashes);
++  bundle.pre += '\n' + buildDispatchPrelude();
++  bundle.modules = bundle.modules.map(([id, code]) => {
++    const hash = hashes[id];
++    return [id, hash != null ? addHashToDefineCall(code, hash) : code];
++  });
+   return bundleToString(bundle).code;
+ }
+ 
+diff --git a/packages/rn-tester/js/HybridAOTDemo.js b/packages/rn-tester/js/HybridAOTDemo.js
+index f850b93..fbd66a8 100644
+--- a/packages/rn-tester/js/HybridAOTDemo.js
++++ b/packages/rn-tester/js/HybridAOTDemo.js
+@@ -31,12 +31,27 @@ function runDemo() {
+   );
+   const bindings = g.__hybridBindings || {};
+   const ids = Object.keys(bindings);
++  const byKind: {[string]: Array<string>} = {};
++  for (const id of ids) {
++    const kind = bindings[id].binding;
++    if (byKind[kind] == null) {
++      byKind[kind] = [];
++    }
++    byKind[kind].push(bindings[id].path);
++  }
+   hlog(
+     '[HybridAOT] dispatch decisions: ' +
+       (ids.length === 0
+         ? '(none)'
+-        : ids
+-            .map(id => id + '=' + bindings[id].binding + ' (' + bindings[id].path + ')')
++        : Object.keys(byKind)
++            .map(kind => {
++              const paths = byKind[kind];
++              const sample =
++                paths.length <= 4
++                  ? paths.join(', ')
++                  : paths.slice(0, 3).join(', ') + ', …';
++              return kind + '=' + paths.length + ' (' + sample + ')';
++            })
+             .join('; ')),
+   );
+ 
 -- 
 2.50.1 (Apple Git-155)
 

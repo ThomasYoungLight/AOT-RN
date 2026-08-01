@@ -61,16 +61,28 @@ def extract_checksum(output, who):
 def main():
     ios = "--ios" in sys.argv
 
-    step(1, "build ring-0 JS twin")
+    step(1, "build ring-0 JS twins")
     run(["bash", str(REAL / "build-rn-twin.sh")])
+    run(["bash", str(REAL / "build-fabric-twin.sh")])
 
-    step(2, "Metro bundle pass -> hybrid-manifest.json")
+    step(2, "Metro bundle passes -> per-platform hybrid manifests")
+    # Metro transforms are platform-specific (Platform.OS inlining, .android/
+    # .ios variants), so each platform's units key against its own manifest.
     run(["node", "../react-native/cli.js", "bundle",
          "--entry-file", "js/RNTesterApp.android.js",
          "--platform", "android", "--dev", "false", "--minify", "false",
-         "--bundle-output", str(SCRATCH / "manifest-pass.bundle"),
+         "--bundle-output", str(SCRATCH / "manifest-pass-android.bundle"),
          "--assets-dest", str(SCRATCH / "manifest-pass-assets")],
-        cwd=RNT)
+        cwd=RNT,
+        env_extra={"HYBRID_MANIFEST_OUT": str(RNT / "build" / "hybrid-manifest-android.json")})
+    if ios:
+        run(["node", "../react-native/cli.js", "bundle",
+             "--entry-file", "js/RNTesterApp.ios.js",
+             "--platform", "ios", "--dev", "false", "--minify", "false",
+             "--bundle-output", str(SCRATCH / "manifest-pass-ios.bundle"),
+             "--assets-dest", str(SCRATCH / "manifest-pass-assets")],
+            cwd=RNT,
+            env_extra={"HYBRID_MANIFEST_OUT": str(RNT / "build" / "hybrid-manifest-ios.json")})
 
     step(3, "registry codegen + shermes compile")
     args = [sys.executable, str(ROOT / "build-rn-registry.py")]
@@ -82,7 +94,7 @@ def main():
     # 4a. typed port checksum
     smoke = SCRATCH / "smoke.ts"
     smoke.write_text(
-        (OUT / "registry-core-rn.ts").read_text()
+        (OUT / "registry-core-rn-android.ts").read_text()
         + "\nconst __r: any = makeTypedCoreExports().run();\n"
           "print(String(__r.host));\n"
     )
