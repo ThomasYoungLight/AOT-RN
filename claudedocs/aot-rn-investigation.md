@@ -489,6 +489,32 @@ In-app speedups — typed-port-native vs real-React-interpreted, inside a live R
 
 Artifacts: `bench/reconciler/real/{rn-core-js-body.js, rn-core-typed-body.template.ts, build-rn-twin.sh}`, generated twin `packages/rn-tester/js/hybrid/HybridReactCore.js`, updated `bench/hybrid/build-rn-registry.py` (assembles ring 0 from the real-port sources; `--ios` for the pod-config units).
 
+### Experiment 12 (2026-08-02): Fabric-shaped host layer — persistence mode + typed diffProperties
+
+Two steps toward the real Fabric host config, both checksum-verified. (Alongside: all patches are now committed — RN branch `hybrid-aot` + `bench/patches/react-native-hybrid-aot.patch`, and the AOT-RN workspace is a git repo — and `bench/hybrid/orchestrate.py` enforces the full pipeline with a built-in equivalence gate: twin-vs-typed-port checksums must match before any registry ships.)
+
+**1. Persistence mode.** Fabric's host contract is clone-based (`cloneNodeWithNewProps`, container child sets, `completeRoot`), not mutation. The typed port now implements React's persistent paths — gated on `supportsMutation`/`supportsPersistence` consts exactly as React gates them — including `hadNoMutationsEffects`, persistent `updateHostComponent` (reuse/clone/re-append decision tree), per-change `HostText` re-creation, `updateHostContainer` child-set construction, and the commit-time container swap. Verified against the real react-reconciler in persistence mode on the same feed workload: **identical checksum 2635835858** (7,397 clones, 402,183 child appends, 2,000 child sets/replaces). The first attempt used fiber-identity for `childrenUnchanged` and produced 3,714 excess clones — **the checksum harness caught a real semantic divergence** (React uses subtree effect-flags, not fiber identity), which is precisely the fidelity net working.
+
+| Persistent mode (host, medians) | ms/interaction | vs interp |
+|---|---|---|
+| real react-reconciler, interpreter | 0.548 | 1.0× |
+| real react-reconciler, untyped native | 0.422 | 1.30× |
+| **typed port, native** | **0.293** | **1.87×** |
+
+Persistence costs everyone more than mutation mode (Fabric's real profile: clone + re-append traffic), and the typed port gains slightly *more* here (1.87× vs mutation's 1.78×) — clone/child-set work is fiber-structure traversal, exactly where typed layouts pay.
+
+**2. Typed `diffProperties`.** RN's real payload diffing (`ReactNativeAttributePayload.diff` + `flattenStyle` + `deepDiffer`, the function Fabric's `cloneInstance` consumes) ported to the typed subset, with the verbatim type-stripped original as baseline. Seeded ViewConfig-shaped workload (nested style configs, custom `process`/`diff` attributes, identity-shared styles, key removal/restore, style-array growth): **identical deep payload checksum 1647276060** across 100k diffs.
+
+| diffProperties (host, medians) | µs/diff | vs interp |
+|---|---|---|
+| real algorithm, interpreter | 1.61 | 1.0× |
+| real algorithm, untyped native | 1.09 | 1.48× |
+| typed port, native | 1.03 | 1.56× |
+
+**Finding:** diffProperties is boundary-dynamic code — arbitrary app props traversed via for-in — so types add little over plain native compilation (1.56× vs 1.48×). This sharpens the architecture's rule of thumb: **type the structures the framework owns (fibers, hooks, queues, clone trees → 1.8–1.9×); the dynamic app boundary gets its ~1.3–1.5× from untyped AOT alone.** For the real Fabric integration, the remaining step is binding these to `global.nativeFabricUIManager` (createNode/cloneNode*/completeRoot) in an RN app surface.
+
+Artifacts: `bench/reconciler/real/{main-real-persistent-body.js, build-real-persistent.sh, build-typed-persistent.sh, diffprops-shared.inc.js, diffprops-real-body.js, diffprops-typed-body.ts}`; persistent paths in `typed-port-core.ts`; orchestrator `bench/hybrid/orchestrate.py`.
+
 ### Rejected alternatives
 
 - **Dual engine / native core + JS islands** (Valdi-style): two heaps, serialization at every boundary, function-identity hazards.

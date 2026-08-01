@@ -30,3 +30,9 @@ bench/ios/bench_hbc.h
 bench/ios/bench2_hbc.h
 bench/reconciler/minireact_hbc.h
 bench/reconciler/interp_minireact_main.cpp
+# generated concatenations / bundles
+bench/reconciler/real/diffprops-real.js
+bench/reconciler/real/diffprops-typed.ts
+bench/reconciler/real/typed-entry-persistent.ts
+bench/reconciler/real/real-react-persistent-bundle.js
+bench/reconciler/real/twin-check*

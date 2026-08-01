@@ -25,6 +25,10 @@ const MutationMask = Placement | Update | ChildDeletion;
 const NoLanes = 0;
 const SyncLane = 1;
 
+// ---- host mode (React gates these same paths on its host config) ----
+const supportsMutation = true;
+const supportsPersistence = false;
+
 function objectIs(x: any, y: any): boolean {
   if (x === y) {
     return x !== 0 || y !== 0 || 1 / x === 1 / y;
@@ -164,11 +168,13 @@ class FiberRootNode {
   containerInfo: any;
   current: FiberNode;
   finishedWork: FiberNode | null;
+  pendingChildren: any;
 
   constructor(containerInfo: any, current: FiberNode) {
     this.containerInfo = containerInfo;
     this.current = current;
     this.finishedWork = null;
+    this.pendingChildren = null;
   }
 }
 
@@ -878,6 +884,63 @@ function appendAllChildren(parent: any, workInProgress: FiberNode): void {
   }
 }
 
+function appendAllChildrenToContainer(childSet: any, workInProgress: FiberNode): void {
+  let node = workInProgress.child;
+  while (node !== null) {
+    if (node.tag === HostComponent || node.tag === HostText) {
+      hcAppendChildToContainerChildSet(childSet, node.stateNode);
+    } else if (node.child !== null) {
+      node.child.ret = node;
+      node = node.child;
+      continue;
+    }
+    if (node === workInProgress) {
+      return;
+    }
+    while (node.sibling === null) {
+      if (node.ret === null || node.ret === workInProgress) {
+        return;
+      }
+      node = node.ret;
+    }
+    node.sibling.ret = node.ret;
+    node = node.sibling;
+  }
+}
+
+// React: hadNoMutationsEffects — children unchanged iff no mutation-mask
+// effects in the completed children (bailed-out subtrees keep fiber identity).
+function hadNoMutationsEffects(current: FiberNode | null, completedWork: FiberNode): boolean {
+  if (current !== null && current.child === completedWork.child) {
+    return true;
+  }
+  if ((completedWork.flags & ChildDeletion) !== NoFlags) {
+    return false;
+  }
+  let child = completedWork.child;
+  while (child !== null) {
+    if ((child.flags & MutationMask) !== NoFlags || (child.subtreeFlags & MutationMask) !== NoFlags) {
+      return false;
+    }
+    child = child.sibling;
+  }
+  return true;
+}
+
+// persistent-mode host root completion (React: updateHostContainer)
+function updateHostContainer(current: FiberNode | null, workInProgress: FiberNode): void {
+  const root: FiberRootNode = workInProgress.stateNode;
+  const childrenUnchanged = hadNoMutationsEffects(current, workInProgress);
+  if (!childrenUnchanged) {
+    const container: any = root.containerInfo;
+    const newChildSet: any = hcCreateContainerChildSet();
+    appendAllChildrenToContainer(newChildSet, workInProgress);
+    root.pendingChildren = newChildSet;
+    workInProgress.flags |= Update;
+    hcFinalizeContainerChildren(container, newChildSet);
+  }
+}
+
 function bubbleProperties(completedWork: FiberNode): void {
   let newChildLanes = NoLanes;
   let subtreeFlags = NoFlags;
@@ -897,12 +960,36 @@ function completeWork(current: FiberNode | null, workInProgress: FiberNode): voi
   const tag = workInProgress.tag;
   if (tag === HostComponent) {
     if (current !== null && workInProgress.stateNode !== null) {
-      const oldProps: any = current.memoizedProps;
-      if (oldProps !== newProps) {
-        const payload: any = diffHostProps(oldProps, newProps);
-        workInProgress.updateQueue = payload;
-        if (payload !== null) {
-          workInProgress.flags |= Update;
+      if (supportsMutation) {
+        const oldProps: any = current.memoizedProps;
+        if (oldProps !== newProps) {
+          const payload: any = diffHostProps(oldProps, newProps);
+          workInProgress.updateQueue = payload;
+          if (payload !== null) {
+            workInProgress.flags |= Update;
+          }
+        }
+      } else {
+        // persistent (Fabric-shaped): clone instances instead of mutating
+        const currentInstance: any = current.stateNode;
+        const oldPropsP: any = current.memoizedProps;
+        const childrenUnchanged = hadNoMutationsEffects(current, workInProgress);
+        if (childrenUnchanged && oldPropsP === newProps) {
+          workInProgress.stateNode = currentInstance;
+        } else {
+          const payloadP: any = oldPropsP !== newProps ? diffHostProps(oldPropsP, newProps) : null;
+          if (childrenUnchanged && payloadP === null) {
+            workInProgress.stateNode = currentInstance;
+          } else {
+            const newInstance: any = hcCloneInstance(
+              currentInstance, payloadP, workInProgress.type, newProps, childrenUnchanged);
+            workInProgress.stateNode = newInstance;
+            if (childrenUnchanged) {
+              workInProgress.flags |= Update;
+            } else {
+              appendAllChildren(newInstance, workInProgress);
+            }
+          }
         }
       }
     } else {
@@ -916,11 +1003,27 @@ function completeWork(current: FiberNode | null, workInProgress: FiberNode): voi
   if (tag === HostText) {
     if (current !== null && workInProgress.stateNode !== null) {
       const oldText: any = current.memoizedProps;
-      if (oldText !== newProps) {
-        workInProgress.flags |= Update;
+      if (supportsMutation) {
+        if (oldText !== newProps) {
+          workInProgress.flags |= Update;
+        }
+      } else {
+        if (oldText !== newProps) {
+          workInProgress.stateNode = hcCreateTextInstance(newProps);
+          workInProgress.flags |= Update;
+        } else {
+          workInProgress.stateNode = current.stateNode;
+        }
       }
     } else {
       workInProgress.stateNode = hcCreateTextInstance(newProps);
+    }
+    bubbleProperties(workInProgress);
+    return;
+  }
+  if (tag === HostRoot) {
+    if (supportsPersistence) {
+      updateHostContainer(current, workInProgress);
     }
     bubbleProperties(workInProgress);
     return;
@@ -1170,7 +1273,14 @@ function performSyncWorkOnRoot(root: FiberRootNode): void {
     performUnitOfWork(workInProgress);
   }
   isRendering = false;
-  commitMutationEffectsOnFiber(rootWip, root);
+  if (supportsPersistence) {
+    if ((rootWip.flags & Update) !== NoFlags) {
+      hcReplaceContainerChildren(root.containerInfo, root.pendingChildren);
+      rootWip.flags &= ~Update;
+    }
+  } else {
+    commitMutationEffectsOnFiber(rootWip, root);
+  }
   root.current = rootWip;
   // updates scheduled during render/commit would be in pendingRoot; none in
   // this app (no useEffect / render-phase updates).

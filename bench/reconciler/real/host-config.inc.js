@@ -11,6 +11,9 @@ var hostStats = {
   removes: 0,
   updates: 0,
   textUpdates: 0,
+  clones: 0,
+  childSets: 0,
+  replaces: 0,
   checksum: 0,
 };
 var nextInstanceId = 1;
@@ -119,6 +122,45 @@ function hcCommitTextUpdate(inst, oldText, newText) {
   mix(hashStr(newText));
 }
 
+// ---- persistence-mode (Fabric-shaped) host ops ----
+function hcCloneInstance(instance, updatePayload, type, newProps, keepChildren) {
+  hostStats.clones++;
+  var children = keepChildren ? instance.children.slice() : mkList();
+  var inst = {id: nextInstanceId++, type: instance.type, props: newProps, children: children};
+  mix(9);
+  mix(coerceInt(instance.id));
+  mix(keepChildren ? 21 : 22);
+  if (updatePayload !== null && updatePayload !== undefined) {
+    for (var pi = 0; pi < updatePayload.length; pi += 2) {
+      mix(hashStr(updatePayload[pi]));
+      mix(hashVal(updatePayload[pi + 1]));
+    }
+  }
+  return inst;
+}
+
+function hcCreateContainerChildSet() {
+  hostStats.childSets++;
+  mix(10);
+  return {children: mkList()};
+}
+
+function hcAppendChildToContainerChildSet(childSet, child) {
+  childSet.children.push(child);
+  mix(11);
+  mix(coerceInt(child.id));
+}
+
+function hcFinalizeContainerChildren(container, childSet) {
+  mix(12);
+}
+
+function hcReplaceContainerChildren(container, childSet) {
+  hostStats.replaces++;
+  container.children = childSet.children;
+  mix(13);
+}
+
 function hostStatsLine() {
   return (
     'host: creates=' + String(hostStats.creates) +
@@ -128,6 +170,9 @@ function hostStatsLine() {
     ' removes=' + String(hostStats.removes) +
     ' updates=' + String(hostStats.updates) +
     ' textUpdates=' + String(hostStats.textUpdates) +
+    ' clones=' + String(hostStats.clones) +
+    ' childSets=' + String(hostStats.childSets) +
+    ' replaces=' + String(hostStats.replaces) +
     ' checksum=' + String(hostStats.checksum >>> 0)
   );
 }
@@ -138,6 +183,9 @@ function hcResetAll() {
 }
 
 function hostStatsReset() {
+  hostStats.clones = 0;
+  hostStats.childSets = 0;
+  hostStats.replaces = 0;
   hostStats.creates = 0;
   hostStats.textCreates = 0;
   hostStats.appends = 0;
