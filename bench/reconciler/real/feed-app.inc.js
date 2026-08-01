@@ -1,8 +1,17 @@
 // The feed app + interaction driver — shared verbatim by the real
 // react-reconciler baseline and the typed port. `RA` (React API) must provide
-// createElement, useState, useCallback, memo. `flushInteraction(fn)` wraps one
-// interaction in a sync flush. Written in the dynamic style of ordinary app
-// code (object-literal props): the reconciler is what gets typed, not the app.
+// createElement, useState, useCallback, memo, useReducer, useMemo, useRef,
+// useEffect, useLayoutEffect, createContext, useContext.
+// `flushInteraction(fn)` wraps one interaction in a sync flush;
+// `flushPassive()` flushes pending passive effects (React.flushPassiveEffects
+// / the port's flushPassiveEffectsImpl) — called by the driver after each
+// interaction so passive timing is pinned identically on both sides.
+//
+// Every effect create/destroy and every useMemo recompute feeds `fx`, an
+// app-level rolling checksum: equal fx on both reconcilers means effect and
+// memo ORDERING is identical, not just the host-mutation stream.
+// Written in the dynamic style of ordinary app code (object-literal props):
+// the reconciler is what gets typed, not the app.
 
 function installFeedApp(RA) {
   var h = RA.createElement;
@@ -10,25 +19,78 @@ function installFeedApp(RA) {
   exposed.onToggle = null;
   exposed.setPosts = null;
   exposed.setVersion = null;
+  exposed.setTheme = null;
+  exposed.bumpHeader = null;
+  var fx = mkObj();
+  fx.sum = 0;
+  exposed.fx = fx;
+  var fxTrace = mkList();
+  exposed.fxTrace = fxTrace;
+  var fxTraceOn = anyVal(false);
+  var gfx = anyVal(typeof globalThis !== 'undefined' ? globalThis : null);
+  if (gfx !== null && gfx.__FX_TRACE !== undefined) {
+    fxTraceOn = true;
+  }
+  function fxMix(n) {
+    fx.sum = ((fx.sum * 31 + coerceInt(n)) | 0) >>> 0 | 0;
+    if (fxTraceOn) {
+      fxTrace.push(coerceInt(n));
+    }
+  }
+
+  var ThemeContext = RA.createContext('light');
 
   function makePost(id, author, ts, content, likes, liked) {
     return {id: id, author: author, ts: ts, content: content, likes: likes, liked: liked};
   }
 
+  function headerReducer(s, n) {
+    return coerceInt((s * 3 + n + 1) % 997);
+  }
+
   function Header(props) {
-    return h('view-header', {id: -1, title: props.title, height: 56, background: '#fafafa'}, props.title);
+    var hr = RA.useReducer(headerReducer, 0);
+    var bumps = hr[0];
+    exposed.bumpHeader = hr[1];
+    var deps1 = mkList();
+    deps1.push(props.title);
+    deps1.push(bumps);
+    var deco = RA.useMemo(function () {
+      fxMix(31);
+      return props.title + ' [' + bumps + ']';
+    }, deps1);
+    var headerRef = RA.useRef(null);
+    var deps2 = mkList();
+    deps2.push(props.title);
+    RA.useEffect(function () {
+      fxMix(headerRef.current !== null ? 100 + coerceInt(headerRef.current.id) : -100);
+      return function () { fxMix(-101); };
+    }, deps2);
+    return h('view-header', {id: -1, ref: headerRef, title: deco, height: 56, background: '#fafafa'}, deco);
   }
   var MemoHeader = RA.memo(Header);
 
   function PostCard(props) {
-    return h('view-card', {id: props.id, padding: 12, margin: 8, background: '#fff', borderRadius: 12},
-      h('text-title', {id: props.id, title: props.title, fontSize: 16, color: '#111'}, props.title),
+    var theme = RA.useContext(ThemeContext);
+    var depsL = mkList();
+    RA.useLayoutEffect(function () {
+      fxMix(2000 + props.id);
+      return function () { fxMix(-(2000 + props.id)); };
+    }, depsL);
+    var depsE = mkList();
+    depsE.push(props.liked);
+    RA.useEffect(function () {
+      fxMix(3000 + props.id);
+      return function () { fxMix(-(3000 + props.id)); };
+    }, depsE);
+    return h('view-card', {id: props.id, padding: 12, margin: 8, background: theme === 'dark' ? '#222' : '#fff', borderRadius: 12},
+      h('text-title', {id: props.id, title: props.title, fontSize: 16, color: theme === 'dark' ? '#eee' : '#111'}, props.title),
       h('text-body', {id: props.id, body: props.body, fontSize: 13, color: '#333'}, props.body),
       h('button', {
         id: props.id,
         likes: props.likes,
         liked: props.liked,
-        background: props.liked ? '#e33' : '#eee',
+        background: props.liked ? '#e33' : (theme === 'dark' ? '#444' : '#eee'),
         borderRadius: 6,
         onPress: props.onToggle,
       }, 'Like ' + props.likes)
@@ -37,7 +99,8 @@ function installFeedApp(RA) {
   var MemoPostCard = RA.memo(PostCard);
 
   function Footer(props) {
-    return h('view-footer', {id: -2, likes: props.likes, height: 48}, 'total ' + props.likes);
+    return h('view-footer', {id: -2, ref: props.hostRef, likes: props.likes, height: 48},
+      'total ' + props.likes + ' e' + props.echo + ' p' + props.passiveEcho);
   }
   var MemoFooter = RA.memo(Footer);
 
@@ -48,8 +111,18 @@ function installFeedApp(RA) {
     var vt = RA.useState(0);
     var version = vt[0];
     var setVersion = vt[1];
+    var th = RA.useState('light');
+    var theme = th[0];
+    var setTheme = th[1];
+    var ec = RA.useState(0);
+    var echo = ec[0];
+    var setEcho = ec[1];
+    var pc = RA.useState(0);
+    var passiveEcho = pc[0];
+    var setPassiveEcho = pc[1];
     exposed.setPosts = setPosts;
     exposed.setVersion = setVersion;
+    exposed.setTheme = setTheme;
 
     var onToggle = RA.useCallback(function (id) {
       setPosts(function (ps) {
@@ -65,6 +138,44 @@ function installFeedApp(RA) {
       });
     }, mkList());
     exposed.onToggle = onToggle;
+
+    // layout effect: fires in the commit's layout phase; the conditional
+    // setState exercises React's synchronous flush of layout-effect updates
+    // at the end of commitRootImpl.
+    var depsV = mkList();
+    depsV.push(version);
+    depsV.push(echo);
+    RA.useLayoutEffect(function () {
+      fxMix(11);
+      if (version > 0 && version % 7 === 3 && echo !== version) {
+        setEcho(version);
+      }
+      return function () { fxMix(12); };
+    }, depsV);
+
+    // passive effect: the conditional setState exercises the sync flush at
+    // the end of flushPassiveEffects.
+    var depsP = mkList();
+    depsP.push(version);
+    RA.useEffect(function () {
+      fxMix(13);
+      if (version > 0 && version % 5 === 2 && passiveEcho !== version) {
+        setPassiveEcho(version);
+      }
+      return function () { fxMix(14); };
+    }, depsP);
+
+    var depsPosts = mkList();
+    depsPosts.push(posts);
+    RA.useEffect(function () {
+      fxMix(15);
+      return function () { fxMix(16); };
+    }, depsPosts);
+
+    // stable function ref on the footer host element
+    var footerRef = RA.useCallback(function (inst) {
+      fxMix(inst === null ? -77 : 77);
+    }, mkList());
 
     var children = mkList();
     children.push(h(MemoHeader, {key: 1000000, title: 'Feed v' + version}));
@@ -82,18 +193,35 @@ function installFeedApp(RA) {
         onToggle: onToggle,
       }));
     }
-    children.push(h(MemoFooter, {key: 1000001, likes: totalLikes}));
-    return h('view-root', {flex: 1, direction: 'column'}, children);
+    children.push(h(MemoFooter, {
+      key: 1000001,
+      likes: totalLikes,
+      echo: echo,
+      passiveEcho: passiveEcho,
+      hostRef: footerRef,
+    }));
+    return h('view-root', {flex: 1, direction: 'column'},
+      h(ThemeContext.Provider, {value: theme}, children));
   }
 
   return {App: App, exposed: exposed, makePost: makePost};
 }
 
 // ---- deterministic driver ----
-function runFeedDriver(app, flushInteraction, log) {
+function runFeedDriver(app, flushInteraction, flushPassive, log) {
   var POSTS = anyVal(150);
   var WARMUP = anyVal(50);
   var TICKS = anyVal(2000);
+  var gdrv = anyVal(typeof globalThis !== 'undefined' ? globalThis : null);
+  if (gdrv !== null && gdrv.__FEED_TICKS !== undefined) {
+    TICKS = coerceInt(gdrv.__FEED_TICKS);
+  }
+  if (gdrv !== null && gdrv.__FEED_WARMUP !== undefined) {
+    WARMUP = coerceInt(gdrv.__FEED_WARMUP);
+  }
+  if (gdrv !== null && gdrv.__FEED_POSTS !== undefined) {
+    POSTS = coerceInt(gdrv.__FEED_POSTS);
+  }
   var exposed = app.exposed;
   var makePost = app.makePost;
 
@@ -114,12 +242,12 @@ function runFeedDriver(app, flushInteraction, log) {
 
   function interact(tick) {
     var r = rand(100);
-    if (r < 70) {
+    if (r < 60) {
       var id = ids[rand(ids.length)];
       flushInteraction(function () {
         exposed.onToggle(id);
       });
-    } else if (r < 90) {
+    } else if (r < 78) {
       var editId = ids[rand(ids.length)];
       flushInteraction(function () {
         exposed.setPosts(function (ps) {
@@ -134,7 +262,7 @@ function runFeedDriver(app, flushInteraction, log) {
           return next;
         });
       });
-    } else {
+    } else if (r < 88) {
       var newId = nextPostId++;
       var author = 'user' + (tick % 17);
       var ts = 1700000000 + tick;
@@ -157,6 +285,20 @@ function runFeedDriver(app, flushInteraction, log) {
           return v + 1;
         });
       });
+    } else if (r < 94) {
+      flushInteraction(function () {
+        exposed.setTheme(function (t) {
+          return t === 'light' ? 'dark' : 'light';
+        });
+      });
+    } else {
+      var n = tick % 5;
+      flushInteraction(function () {
+        exposed.bumpHeader(n);
+      });
+    }
+    if (flushPassive !== null && flushPassive !== undefined) {
+      flushPassive();
     }
   }
 
@@ -168,11 +310,18 @@ function runFeedDriver(app, flushInteraction, log) {
       }
     },
     run: function () {
+      exposed.fx.sum = 0;
       var t0 = anyVal(Date.now());
       for (var t = anyVal(0); t < TICKS; t++) {
         interact(t + WARMUP);
       }
-      return {ms: Date.now() - t0, ticks: TICKS, posts: ids.length};
+      var out = mkObj();
+      out.ms = Date.now() - t0;
+      out.ticks = TICKS;
+      out.posts = ids.length;
+      out.fx = exposed.fx.sum;
+      out.trace = exposed.fxTrace;
+      return out;
     },
   };
 }

@@ -58,8 +58,16 @@ function runBenchmark() {
     useState: React.useState,
     useCallback: React.useCallback,
     memo: React.memo,
+    useReducer: React.useReducer,
+    useMemo: React.useMemo,
+    useRef: React.useRef,
+    useEffect: React.useEffect,
+    useLayoutEffect: React.useLayoutEffect,
+    createContext: React.createContext,
+    useContext: React.useContext,
   });
-  var driver = runFeedDriver(appApi, function (fn) { R.flushSync(fn); }, null);
+  var flushPassive = function () { R.flushPassiveEffects(); };
+  var driver = runFeedDriver(appApi, function (fn) { R.flushSync(fn); }, flushPassive, null);
   var rootContainer = {id: 0, type: 'root', children: mkList()};
   var root = R.createContainer(
     rootContainer, 0 /* LegacyRoot */, null, false, null, '',
@@ -71,6 +79,7 @@ function runBenchmark() {
       root, null, null
     );
   });
+  flushPassive();
   driver.warmup();
   hostStatsReset();
   var res = driver.run();
@@ -79,7 +88,7 @@ function runBenchmark() {
     ms: res.ms,
     ticks: res.ticks,
     posts: res.posts,
-    host: hostStatsLine(),
+    host: hostStatsLine() + ' fx=' + res.fx,
   };
 }
 

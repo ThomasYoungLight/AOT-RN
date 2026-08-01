@@ -12,6 +12,7 @@ const FunctionComponent = 0;
 const HostRoot = 3;
 const HostComponent = 5;
 const HostText = 6;
+const ContextProvider = 10;
 const SimpleMemoComponent = 15;
 
 // ---- flags ----
@@ -19,7 +20,16 @@ const NoFlags = 0;
 const Placement = 2;
 const Update = 4;
 const ChildDeletion = 16;
+const Ref = 512;
+const Passive = 2048;
 const MutationMask = Placement | Update | ChildDeletion;
+const LayoutMask = Update | Ref;
+const PassiveMask = Passive | ChildDeletion;
+
+// ---- hook effect tags (HookFlags) ----
+const HookHasEffect = 1;
+const HookLayout = 4;
+const HookPassive = 8;
 
 // ---- lanes ----
 const NoLanes = 0;
@@ -62,12 +72,14 @@ class El {
   $$el: boolean;
   type: any;
   key: any;
+  ref: any;
   props: any;
 
-  constructor(type: any, key: any, props: any) {
+  constructor(type: any, key: any, ref: any, props: any) {
     this.$$el = true;
     this.type = type;
     this.key = key;
+    this.ref = ref;
     this.props = props;
   }
 }
@@ -89,14 +101,18 @@ function memoImpl(render: any): any {
 function createElementImpl(type: any, config: any, c1: any, c2: any, c3: any): any {
   const props: any = new G.Object();
   let key: any = null;
+  let ref: any = null;
   if (config !== null && config !== undefined) {
     for (const k in config) {
-      if (k !== 'key') {
+      if (k !== 'key' && k !== 'ref') {
         props[k] = config[k];
       }
     }
     if (config.key !== undefined) {
       key = '' + config.key;
+    }
+    if (config.ref !== undefined && config.ref !== null) {
+      ref = config.ref;
     }
   }
   if (c2 === undefined && c3 === undefined) {
@@ -116,7 +132,7 @@ function createElementImpl(type: any, config: any, c1: any, c2: any, c3: any): a
     }
     props.children = arr;
   }
-  return new El(type, key, props);
+  return new El(type, key, ref, props);
 }
 
 // ---- fiber ----
@@ -130,10 +146,12 @@ class FiberNode {
   child: FiberNode | null;
   sibling: FiberNode | null;
   index: number;
+  ref: any;
   pendingProps: any;
   memoizedProps: any;
   updateQueue: any;
   memoizedState: any;
+  dependencies: any;
   lanes: number;
   childLanes: number;
   alternate: FiberNode | null;
@@ -151,10 +169,12 @@ class FiberNode {
     this.child = null;
     this.sibling = null;
     this.index = 0;
+    this.ref = null;
     this.pendingProps = pendingProps;
     this.memoizedProps = null;
     this.updateQueue = null;
     this.memoizedState = null;
+    this.dependencies = null;
     this.lanes = NoLanes;
     this.childLanes = NoLanes;
     this.alternate = null;
@@ -200,8 +220,12 @@ function createWorkInProgress(current: FiberNode, pendingProps: any): FiberNode 
   workInProgress.memoizedProps = current.memoizedProps;
   workInProgress.memoizedState = current.memoizedState;
   workInProgress.updateQueue = current.updateQueue;
+  const currentDependencies: any = current.dependencies;
+  workInProgress.dependencies =
+    currentDependencies === null ? null : createDependencies(currentDependencies.lanes, currentDependencies.firstContext);
   workInProgress.sibling = current.sibling;
   workInProgress.index = current.index;
+  workInProgress.ref = current.ref;
   workInProgress.stateNode = current.stateNode;
   return workInProgress;
 }
@@ -215,10 +239,13 @@ function createFiberFromElement(element: any, lanes: number): FiberNode {
   } else if (type !== null && typeof type === 'object' && type.$$memo === true) {
     tag = SimpleMemoComponent;
     resolvedType = type.render;
+  } else if (type !== null && typeof type === 'object' && type.$$provider === true) {
+    tag = ContextProvider;
   }
   const fiber = new FiberNode(tag, element.props, element.key);
   fiber.elementType = type;
   fiber.type = resolvedType;
+  fiber.ref = element.ref;
   fiber.lanes = lanes;
   return fiber;
 }
@@ -227,6 +254,152 @@ function createFiberFromText(content: any, lanes: number): FiberNode {
   const fiber = new FiberNode(HostText, content, null);
   fiber.lanes = lanes;
   return fiber;
+}
+
+// ---- context (ReactFiberNewContext) ----
+// dynamic objects, not classes: _currentValue / firstContext / next are
+// mutated through any-references (push/popProvider, prepareToReadContext),
+// which the typed system can't see — class fields would freeze.
+function createContextDependency(context: any, memoizedValue: any): any {
+  const d: any = mkObj();
+  d.context = context;
+  d.memoizedValue = memoizedValue;
+  d.next = null;
+  return d;
+}
+
+function createDependencies(lanes: number, firstContext: any): any {
+  const dl: any = mkObj();
+  dl.lanes = lanes;
+  dl.firstContext = firstContext;
+  return dl;
+}
+
+function createContextImpl(defaultValue: any): any {
+  const ctx: any = mkObj();
+  ctx.$$context = true;
+  ctx._currentValue = defaultValue;
+  const provider: any = mkObj();
+  provider.$$provider = true;
+  provider._context = ctx;
+  ctx.Provider = provider;
+  return ctx;
+}
+
+const ctxValueStack: any = new G.Array();
+let lastContextDependency: any = null;
+
+function pushProvider(providerFiber: FiberNode, context: any, nextValue: any): void {
+  ctxValueStack.push(context._currentValue);
+  context._currentValue = nextValue;
+}
+
+function popProvider(context: any, providerFiber: FiberNode): void {
+  context._currentValue = ctxValueStack.pop();
+}
+
+function prepareToReadContext(workInProgress: FiberNode, renderLanes: number): void {
+  lastContextDependency = null;
+  const dependencies: any = workInProgress.dependencies;
+  if (dependencies !== null) {
+    if (dependencies.firstContext !== null) {
+      if ((dependencies.lanes & renderLanes) !== NoLanes) {
+        didReceiveUpdate = true;
+      }
+      dependencies.firstContext = null;
+    }
+  }
+}
+
+function readContext(context: any): any {
+  const value: any = context._currentValue;
+  const contextItem: any = createContextDependency(context, value);
+  const f = currentlyRenderingFiber;
+  if (lastContextDependency === null) {
+    if (f === null) {
+      throw new Error('context read outside render');
+    }
+    lastContextDependency = contextItem;
+    f.dependencies = createDependencies(NoLanes, contextItem);
+  } else {
+    lastContextDependency.next = contextItem;
+    lastContextDependency = contextItem;
+  }
+  return value;
+}
+
+function useContextImpl(context: any): any {
+  return readContext(context);
+}
+
+function scheduleContextWorkOnParentPath(parent: FiberNode | null, renderLanes: number, propagationRoot: FiberNode): void {
+  let node = parent;
+  while (node !== null) {
+    const alternate = node.alternate;
+    if ((node.childLanes & renderLanes) !== renderLanes) {
+      node.childLanes |= renderLanes;
+      if (alternate !== null) {
+        alternate.childLanes |= renderLanes;
+      }
+    } else if (alternate !== null && (alternate.childLanes & renderLanes) !== renderLanes) {
+      alternate.childLanes |= renderLanes;
+    }
+    if (node === propagationRoot) {
+      break;
+    }
+    node = node.ret;
+  }
+}
+
+function propagateContextChange(workInProgress: FiberNode, context: any, renderLanes: number): void {
+  let fiber = workInProgress.child;
+  if (fiber !== null) {
+    fiber.ret = workInProgress;
+  }
+  while (fiber !== null) {
+    let nextFiber: FiberNode | null = null;
+    const list: any = fiber.dependencies;
+    if (list !== null) {
+      nextFiber = fiber.child;
+      let dependency: any = list.firstContext;
+      while (dependency !== null) {
+        if (dependency.context === context) {
+          fiber.lanes |= renderLanes;
+          const alternate = fiber.alternate;
+          if (alternate !== null) {
+            alternate.lanes |= renderLanes;
+          }
+          scheduleContextWorkOnParentPath(fiber.ret, renderLanes, workInProgress);
+          list.lanes |= renderLanes;
+          break;
+        }
+        dependency = dependency.next;
+      }
+    } else if (fiber.tag === ContextProvider) {
+      nextFiber = fiber.type === workInProgress.type ? null : fiber.child;
+    } else {
+      nextFiber = fiber.child;
+    }
+    if (nextFiber !== null) {
+      nextFiber.ret = fiber;
+    } else {
+      nextFiber = fiber;
+      while (nextFiber !== null) {
+        if (nextFiber === workInProgress) {
+          nextFiber = null;
+          break;
+        }
+        const sibling: FiberNode | null = nextFiber.sibling;
+        if (sibling !== null) {
+          sibling.ret = nextFiber.ret;
+          nextFiber = sibling;
+          break;
+        }
+        nextFiber = nextFiber.ret;
+      }
+    }
+    fiber = nextFiber;
+  }
 }
 
 // ---- hooks ----
@@ -249,11 +422,13 @@ class Hook {
 class HookQueue {
   pending: any;
   dispatch: any;
+  lastRenderedReducer: any;
   lastRenderedState: any;
 
   constructor() {
     this.pending = null;
     this.dispatch = null;
+    this.lastRenderedReducer = null;
     this.lastRenderedState = null;
   }
 }
@@ -355,28 +530,18 @@ function dispatchSetState(fiber: FiberNode, queue: HookQueue, action: any): void
   scheduleUpdateOnFiber(fiber);
 }
 
-function useStateImpl(initialState: any): any {
-  if (isMountPhase) {
-    const hook = mountWorkInProgressHook();
-    const init: any = typeof initialState === 'function' ? initialState() : initialState;
-    hook.memoizedState = init;
-    hook.baseState = init;
-    const queue = new HookQueue();
-    queue.lastRenderedState = init;
-    hook.queue = queue;
-    const owner: FiberNode = currentlyRenderingFiber !== null ? currentlyRenderingFiber : new FiberNode(-1, null, null);
-    const dispatch: any = function (action: any): void {
-      dispatchSetState(owner, queue, action);
-    };
-    queue.dispatch = dispatch;
-    const r: any = new G.Array();
-    r.push(hook.memoizedState);
-    r.push(dispatch);
-    return r;
-  }
-  // update path (updateReducer with basicStateReducer)
+// React: dispatchReducerAction — no eager-state computation.
+function dispatchReducerAction(fiber: FiberNode, queue: HookQueue, action: any): void {
+  const update = new HookUpdate(action);
+  enqueueUpdate(queue, update);
+  scheduleUpdateOnFiber(fiber);
+}
+
+// shared update path (React: updateReducer); useState uses basicStateReducer
+function updateReducerImpl(reducer: any): any {
   const hook = updateWorkInProgressHook();
   const queue: HookQueue = hook.queue;
+  queue.lastRenderedReducer = reducer;
   let baseQueue: any = hook.baseQueue;
   const pendingQueue: any = queue.pending;
   if (pendingQueue !== null) {
@@ -395,7 +560,7 @@ function useStateImpl(initialState: any): any {
     let newState: any = hook.baseState;
     let update: any = first;
     while (true) {
-      newState = update.hasEagerState ? update.eagerState : basicStateReducer(newState, update.action);
+      newState = update.hasEagerState ? update.eagerState : reducer(newState, update.action);
       update = update.next;
       if (update === first) {
         break;
@@ -409,10 +574,56 @@ function useStateImpl(initialState: any): any {
     hook.baseQueue = null;
     queue.lastRenderedState = newState;
   }
-  const r2: any = new G.Array();
-  r2.push(hook.memoizedState);
-  r2.push(queue.dispatch);
-  return r2;
+  const r: any = new G.Array();
+  r.push(hook.memoizedState);
+  r.push(queue.dispatch);
+  return r;
+}
+
+function useReducerImpl(reducer: any, initialArg: any, init: any): any {
+  if (isMountPhase) {
+    const hook = mountWorkInProgressHook();
+    const initialState: any = init !== undefined && init !== null ? init(initialArg) : initialArg;
+    hook.memoizedState = initialState;
+    hook.baseState = initialState;
+    const queue = new HookQueue();
+    queue.lastRenderedReducer = reducer;
+    queue.lastRenderedState = initialState;
+    hook.queue = queue;
+    const owner: FiberNode = currentlyRenderingFiber !== null ? currentlyRenderingFiber : new FiberNode(-1, null, null);
+    const dispatch: any = function (action: any): void {
+      dispatchReducerAction(owner, queue, action);
+    };
+    queue.dispatch = dispatch;
+    const r: any = new G.Array();
+    r.push(hook.memoizedState);
+    r.push(dispatch);
+    return r;
+  }
+  return updateReducerImpl(reducer);
+}
+
+function useStateImpl(initialState: any): any {
+  if (isMountPhase) {
+    const hook = mountWorkInProgressHook();
+    const init: any = typeof initialState === 'function' ? initialState() : initialState;
+    hook.memoizedState = init;
+    hook.baseState = init;
+    const queue = new HookQueue();
+    queue.lastRenderedReducer = basicStateReducer;
+    queue.lastRenderedState = init;
+    hook.queue = queue;
+    const owner: FiberNode = currentlyRenderingFiber !== null ? currentlyRenderingFiber : new FiberNode(-1, null, null);
+    const dispatch: any = function (action: any): void {
+      dispatchSetState(owner, queue, action);
+    };
+    queue.dispatch = dispatch;
+    const r: any = new G.Array();
+    r.push(hook.memoizedState);
+    r.push(dispatch);
+    return r;
+  }
+  return updateReducerImpl(basicStateReducer);
 }
 
 function areHookInputsEqual(nextDeps: any, prevDeps: any): boolean {
@@ -455,6 +666,145 @@ function useCallbackImpl(callback: any, deps: any): any {
   }
   hook.memoizedState = new CallbackPair(callback, nextDeps);
   return callback;
+}
+
+class MemoPair {
+  value: any;
+  deps: any;
+
+  constructor(value: any, deps: any) {
+    this.value = value;
+    this.deps = deps;
+  }
+}
+
+function useMemoImpl(nextCreate: any, deps: any): any {
+  const nextDeps: any = deps === undefined ? null : deps;
+  if (isMountPhase) {
+    const hook = mountWorkInProgressHook();
+    const nextValue: any = nextCreate();
+    hook.memoizedState = new MemoPair(nextValue, nextDeps);
+    return nextValue;
+  }
+  const hook = updateWorkInProgressHook();
+  const prevState: any = hook.memoizedState;
+  if (prevState !== null && nextDeps !== null && areHookInputsEqual(nextDeps, prevState.deps)) {
+    return prevState.value;
+  }
+  const nextValue2: any = nextCreate();
+  hook.memoizedState = new MemoPair(nextValue2, nextDeps);
+  return nextValue2;
+}
+
+function useRefImpl(initialValue: any): any {
+  if (isMountPhase) {
+    const hook = mountWorkInProgressHook();
+    // dynamic object: ref.current is written by app code and commitAttachRef
+    // through any-references.
+    const box: any = mkObj();
+    box.current = initialValue;
+    hook.memoizedState = box;
+    return box;
+  }
+  const hook = updateWorkInProgressHook();
+  return hook.memoizedState;
+}
+
+// ---- effect hooks (ReactFiberHooks: pushEffect / mount/updateEffectImpl) ----
+// dynamic objects, not classes: `next` forms a circular list and `destroy`
+// is rewritten from commit code through any-references, which the typed
+// system can't see — class fields would freeze (see catalog).
+function createEffectNode(tag: number, create: any, destroy: any, deps: any): any {
+  const e: any = mkObj();
+  e.tag = tag;
+  e.create = create;
+  e.destroy = destroy;
+  e.deps = deps;
+  e.next = null;
+  return e;
+}
+
+// dynamic object, not a class: its only typed-visible field write would be
+// the null initializer, which shermes freezes as null-type (see catalog).
+function createFCUpdateQueue(): any {
+  const q: any = mkObj();
+  q.lastEffect = null;
+  return q;
+}
+
+function pushEffect(tag: number, create: any, destroy: any, deps: any): any {
+  const effect: any = createEffectNode(tag, create, destroy, deps);
+  const f = currentlyRenderingFiber;
+  if (f === null) {
+    throw new Error('effect outside render');
+  }
+  let componentUpdateQueue: any = f.updateQueue;
+  if (componentUpdateQueue === null) {
+    componentUpdateQueue = createFCUpdateQueue();
+    f.updateQueue = componentUpdateQueue;
+    effect.next = effect;
+    componentUpdateQueue.lastEffect = effect;
+  } else {
+    const lastEffect: any = componentUpdateQueue.lastEffect;
+    if (lastEffect === null) {
+      effect.next = effect;
+      componentUpdateQueue.lastEffect = effect;
+    } else {
+      const firstEffect: any = lastEffect.next;
+      lastEffect.next = effect;
+      effect.next = firstEffect;
+      componentUpdateQueue.lastEffect = effect;
+    }
+  }
+  return effect;
+}
+
+function mountEffectImpl(fiberFlags: number, hookFlags: number, create: any, deps: any): void {
+  const hook = mountWorkInProgressHook();
+  const nextDeps: any = deps === undefined ? null : deps;
+  const f = currentlyRenderingFiber;
+  if (f !== null) {
+    f.flags |= fiberFlags;
+  }
+  hook.memoizedState = pushEffect(HookHasEffect | hookFlags, create, undefined, nextDeps);
+}
+
+function updateEffectImpl(fiberFlags: number, hookFlags: number, create: any, deps: any): void {
+  const hook = updateWorkInProgressHook();
+  const nextDeps: any = deps === undefined ? null : deps;
+  let destroy: any = undefined;
+  if (currentHook !== null) {
+    const prevEffect: any = currentHook.memoizedState;
+    destroy = prevEffect.destroy;
+    if (nextDeps !== null) {
+      const prevDeps: any = prevEffect.deps;
+      if (areHookInputsEqual(nextDeps, prevDeps)) {
+        hook.memoizedState = pushEffect(hookFlags, create, destroy, nextDeps);
+        return;
+      }
+    }
+  }
+  const f = currentlyRenderingFiber;
+  if (f !== null) {
+    f.flags |= fiberFlags;
+  }
+  hook.memoizedState = pushEffect(HookHasEffect | hookFlags, create, destroy, nextDeps);
+}
+
+function useEffectImpl(create: any, deps: any): void {
+  if (isMountPhase) {
+    mountEffectImpl(Passive, HookPassive, create, deps);
+  } else {
+    updateEffectImpl(Passive, HookPassive, create, deps);
+  }
+}
+
+function useLayoutEffectImpl(create: any, deps: any): void {
+  if (isMountPhase) {
+    mountEffectImpl(Update, HookLayout, create, deps);
+  } else {
+    updateEffectImpl(Update, HookLayout, create, deps);
+  }
 }
 
 function renderWithHooks(current: FiberNode | null, workInProgress: FiberNode, Component: any, props: any): any {
@@ -543,6 +893,7 @@ function updateTextNode(returnFiber: FiberNode, current: FiberNode | null, textC
 function updateElement(returnFiber: FiberNode, current: FiberNode | null, element: any, lanes: number): FiberNode {
   if (current !== null && current.elementType === element.type) {
     const existing = useFiber(current, element.props);
+    existing.ref = element.ref;
     existing.ret = returnFiber;
     return existing;
   }
@@ -718,6 +1069,7 @@ function reconcileSingleElement(returnFiber: FiberNode, currentFirstChild: Fiber
       if (child.elementType === element.type) {
         deleteRemainingChildren(returnFiber, child.sibling, track);
         const existing = useFiber(child, element.props);
+        existing.ref = element.ref;
         existing.ret = returnFiber;
         return existing;
       }
@@ -784,6 +1136,7 @@ function bailoutOnAlreadyFinishedWork(current: FiberNode | null, workInProgress:
 }
 
 function updateFunctionComponent(current: FiberNode | null, workInProgress: FiberNode, Component: any, nextProps: any, renderLanes: number): FiberNode | null {
+  prepareToReadContext(workInProgress, renderLanes);
   const nextChildren: any = renderWithHooks(current, workInProgress, Component, nextProps);
   if (current !== null && !didReceiveUpdate) {
     // bailoutHooks
@@ -792,6 +1145,34 @@ function updateFunctionComponent(current: FiberNode | null, workInProgress: Fibe
   }
   reconcileChildren(current, workInProgress, nextChildren, renderLanes);
   return workInProgress.child;
+}
+
+function updateContextProvider(current: FiberNode | null, workInProgress: FiberNode, renderLanes: number): FiberNode | null {
+  const providerType: any = workInProgress.type;
+  const context: any = providerType._context;
+  const newProps: any = workInProgress.pendingProps;
+  const oldProps: any = current !== null ? current.memoizedProps : null;
+  const newValue: any = newProps.value;
+  pushProvider(workInProgress, context, newValue);
+  if (oldProps !== null) {
+    const oldValue: any = oldProps.value;
+    if (objectIs(oldValue, newValue)) {
+      if (oldProps.children === newProps.children) {
+        return bailoutOnAlreadyFinishedWork(current, workInProgress, renderLanes);
+      }
+    } else {
+      propagateContextChange(workInProgress, context, renderLanes);
+    }
+  }
+  reconcileChildren(current, workInProgress, newProps.children, renderLanes);
+  return workInProgress.child;
+}
+
+function markRefHost(current: FiberNode | null, workInProgress: FiberNode): void {
+  const ref: any = workInProgress.ref;
+  if ((current === null && ref !== null) || (current !== null && current.ref !== ref)) {
+    workInProgress.flags |= Ref;
+  }
 }
 
 function updateSimpleMemoComponent(current: FiberNode | null, workInProgress: FiberNode, Component: any, nextProps: any, renderLanes: number): FiberNode | null {
@@ -816,6 +1197,7 @@ function updateHostRoot(current: FiberNode | null, workInProgress: FiberNode, re
 }
 
 function updateHostComponent(current: FiberNode | null, workInProgress: FiberNode, renderLanes: number): FiberNode | null {
+  markRefHost(current, workInProgress);
   const nextProps: any = workInProgress.pendingProps;
   const nextChildren: any = nextProps.children;
   reconcileChildren(current, workInProgress, nextChildren === undefined ? null : nextChildren, renderLanes);
@@ -831,6 +1213,12 @@ function beginWork(current: FiberNode | null, workInProgress: FiberNode, renderL
     } else {
       if ((current.lanes & renderLanes) === NoLanes) {
         didReceiveUpdate = false;
+        // React: attemptEarlyBailoutIfNoScheduledUpdate re-pushes stack
+        // frames for stackful fiber types before bailing out.
+        if (workInProgress.tag === ContextProvider) {
+          const bailCtx: any = workInProgress.type._context;
+          pushProvider(workInProgress, bailCtx, workInProgress.memoizedProps.value);
+        }
         return bailoutOnAlreadyFinishedWork(current, workInProgress, renderLanes);
       }
       didReceiveUpdate = false;
@@ -855,6 +1243,9 @@ function beginWork(current: FiberNode | null, workInProgress: FiberNode, renderL
   }
   if (tag === HostText) {
     return null;
+  }
+  if (tag === ContextProvider) {
+    return updateContextProvider(current, workInProgress, renderLanes);
   }
   throw new Error('unknown tag ' + String(tag));
 }
@@ -942,14 +1333,29 @@ function updateHostContainer(current: FiberNode | null, workInProgress: FiberNod
 }
 
 function bubbleProperties(completedWork: FiberNode): void {
+  // React: when the fiber bailed out (children are the CURRENT fibers, not
+  // fresh work-in-progress clones), only static flags bubble — otherwise
+  // stale effect flags (Ref/Passive/Update) from previous commits would leak
+  // into subtreeFlags and re-fire effects/ref-attaches on bailed subtrees.
+  // This port tracks no static flags, so the bailout path bubbles lanes only.
+  const alt = completedWork.alternate;
+  const didBailout = alt !== null && alt.child === completedWork.child;
   let newChildLanes = NoLanes;
   let subtreeFlags = NoFlags;
   let child = completedWork.child;
-  while (child !== null) {
-    newChildLanes = newChildLanes | child.lanes | child.childLanes;
-    subtreeFlags = subtreeFlags | child.subtreeFlags | child.flags;
-    child.ret = completedWork;
-    child = child.sibling;
+  if (didBailout) {
+    while (child !== null) {
+      newChildLanes = newChildLanes | child.lanes | child.childLanes;
+      child.ret = completedWork;
+      child = child.sibling;
+    }
+  } else {
+    while (child !== null) {
+      newChildLanes = newChildLanes | child.lanes | child.childLanes;
+      subtreeFlags = subtreeFlags | child.subtreeFlags | child.flags;
+      child.ret = completedWork;
+      child = child.sibling;
+    }
   }
   completedWork.subtreeFlags |= subtreeFlags;
   completedWork.childLanes = newChildLanes;
@@ -1025,6 +1431,11 @@ function completeWork(current: FiberNode | null, workInProgress: FiberNode): voi
     if (supportsPersistence) {
       updateHostContainer(current, workInProgress);
     }
+    bubbleProperties(workInProgress);
+    return;
+  }
+  if (tag === ContextProvider) {
+    popProvider(workInProgress.type._context, workInProgress);
     bubbleProperties(workInProgress);
     return;
   }
@@ -1111,17 +1522,112 @@ function commitPlacement(finishedWork: FiberNode): void {
   insertOrAppendPlacementNode(finishedWork, before, parent);
 }
 
-function commitDeletionEffectsOnFiber(deletedFiber: FiberNode, hostParent: any): void {
-  if (deletedFiber.tag === HostComponent || deletedFiber.tag === HostText) {
-    if (hostParent !== null) {
-      hcRemoveChild(hostParent, deletedFiber.stateNode);
+function commitAttachRef(finishedWork: FiberNode): void {
+  const ref: any = finishedWork.ref;
+  if (ref !== null) {
+    const instance: any = finishedWork.stateNode;
+    if (typeof ref === 'function') {
+      ref(instance);
+    } else {
+      ref.current = instance;
     }
-    let inner = deletedFiber.child;
-    while (inner !== null) {
-      commitDeletionEffectsOnFiber(inner, null);
-      inner = inner.sibling;
+  }
+}
+
+function safelyDetachRef(current: FiberNode): void {
+  const ref: any = current.ref;
+  if (ref !== null) {
+    if (typeof ref === 'function') {
+      ref(null);
+    } else {
+      ref.current = null;
+    }
+  }
+}
+
+function commitHookEffectListUnmount(flags: number, finishedWork: FiberNode): void {
+  const updateQueue: any = finishedWork.updateQueue;
+  const lastEffect: any = updateQueue !== null ? updateQueue.lastEffect : null;
+  if (lastEffect !== null) {
+    const firstEffect: any = lastEffect.next;
+    let effect: any = firstEffect;
+    do {
+      if ((effect.tag & flags) === flags) {
+        const destroy: any = effect.destroy;
+        effect.destroy = undefined;
+        if (destroy !== undefined && destroy !== null) {
+          destroy();
+        }
+      }
+      effect = effect.next;
+    } while (effect !== firstEffect);
+  }
+}
+
+function commitHookEffectListMount(flags: number, finishedWork: FiberNode): void {
+  const updateQueue: any = finishedWork.updateQueue;
+  const lastEffect: any = updateQueue !== null ? updateQueue.lastEffect : null;
+  if (lastEffect !== null) {
+    const firstEffect: any = lastEffect.next;
+    let effect: any = firstEffect;
+    do {
+      if ((effect.tag & flags) === flags) {
+        effect.destroy = effect.create();
+      }
+      effect = effect.next;
+    } while (effect !== firstEffect);
+  }
+}
+
+// React's deletion pass destroys insertion/layout effects inline (parent ->
+// child order), WITHOUT clearing effect.destroy — passive destroys for the
+// same fibers run later, in the passive-unmount pass.
+function commitDeletionHookEffects(deletedFiber: FiberNode): void {
+  const updateQueue: any = deletedFiber.updateQueue;
+  if (updateQueue !== null) {
+    const lastEffect: any = updateQueue.lastEffect;
+    if (lastEffect !== null) {
+      const firstEffect: any = lastEffect.next;
+      let effect: any = firstEffect;
+      do {
+        const destroy: any = effect.destroy;
+        if (destroy !== undefined && destroy !== null) {
+          if ((effect.tag & HookLayout) !== NoFlags) {
+            destroy();
+          }
+        }
+        effect = effect.next;
+      } while (effect !== firstEffect);
+    }
+  }
+}
+
+function commitDeletionEffectsOnFiber(deletedFiber: FiberNode, hostParent: any): void {
+  const tag = deletedFiber.tag;
+  if (tag === HostComponent || tag === HostText) {
+    if (tag === HostComponent) {
+      safelyDetachRef(deletedFiber);
+    }
+    if (supportsMutation) {
+      let inner = deletedFiber.child;
+      while (inner !== null) {
+        commitDeletionEffectsOnFiber(inner, null);
+        inner = inner.sibling;
+      }
+      if (hostParent !== null) {
+        hcRemoveChild(hostParent, deletedFiber.stateNode);
+      }
+    } else {
+      let inner2 = deletedFiber.child;
+      while (inner2 !== null) {
+        commitDeletionEffectsOnFiber(inner2, hostParent);
+        inner2 = inner2.sibling;
+      }
     }
     return;
+  }
+  if (tag === FunctionComponent || tag === SimpleMemoComponent) {
+    commitDeletionHookEffects(deletedFiber);
   }
   let child = deletedFiber.child;
   while (child !== null) {
@@ -1149,19 +1655,22 @@ function commitDeletionEffects(root: FiberRootNode, returnFiber: FiberNode, dele
 
 function commitReconciliationEffects(finishedWork: FiberNode): void {
   if ((finishedWork.flags & Placement) !== NoFlags) {
-    commitPlacement(finishedWork);
+    if (supportsMutation) {
+      commitPlacement(finishedWork);
+    }
     finishedWork.flags &= ~Placement;
   }
 }
 
 function commitMutationEffectsOnFiber(finishedWork: FiberNode, root: FiberRootNode): void {
-  // recursivelyTraverseMutationEffects
+  const current = finishedWork.alternate;
+  // recursivelyTraverseMutationEffects — deletions persist on the fiber for
+  // the passive-unmount pass (React clears them during flushPassiveEffects).
   const deletions: any = finishedWork.deletions;
   if (deletions !== null) {
     for (let i = 0; i < deletions.length; i++) {
       commitDeletionEffects(root, finishedWork, deletions[i]);
     }
-    finishedWork.deletions = null;
   }
   if ((finishedWork.subtreeFlags & MutationMask) !== NoFlags) {
     let child = finishedWork.child;
@@ -1172,8 +1681,19 @@ function commitMutationEffectsOnFiber(finishedWork: FiberNode, root: FiberRootNo
   }
   commitReconciliationEffects(finishedWork);
   const tag = finishedWork.tag;
-  if (tag === HostComponent) {
+  if (tag === FunctionComponent || tag === SimpleMemoComponent) {
     if ((finishedWork.flags & Update) !== NoFlags) {
+      // Layout effects are destroyed during the mutation phase so that all
+      // destroy functions run before any create functions.
+      commitHookEffectListUnmount(HookLayout | HookHasEffect, finishedWork);
+    }
+    return;
+  }
+  if (tag === HostComponent) {
+    if ((finishedWork.flags & Ref) !== NoFlags && current !== null) {
+      safelyDetachRef(current);
+    }
+    if (supportsMutation && (finishedWork.flags & Update) !== NoFlags) {
       const payload: any = finishedWork.updateQueue;
       finishedWork.updateQueue = null;
       if (payload !== null) {
@@ -1184,13 +1704,91 @@ function commitMutationEffectsOnFiber(finishedWork: FiberNode, root: FiberRootNo
     return;
   }
   if (tag === HostText) {
-    if ((finishedWork.flags & Update) !== NoFlags) {
-      const current = finishedWork.alternate;
-      const oldText: any = current !== null ? current.memoizedProps : '';
+    if (supportsMutation && (finishedWork.flags & Update) !== NoFlags) {
+      const currentText = finishedWork.alternate;
+      const oldText: any = currentText !== null ? currentText.memoizedProps : '';
       hcCommitTextUpdate(finishedWork.stateNode, oldText, finishedWork.memoizedProps);
       finishedWork.flags &= ~Update;
     }
     return;
+  }
+  if (tag === HostRoot) {
+    if (supportsPersistence && (finishedWork.flags & Update) !== NoFlags) {
+      hcReplaceContainerChildren(root.containerInfo, root.pendingChildren);
+      finishedWork.flags &= ~Update;
+    }
+    return;
+  }
+}
+
+// ---- commit (layout phase) ----
+function commitLayoutEffects(finishedWork: FiberNode): void {
+  if ((finishedWork.subtreeFlags & LayoutMask) !== NoFlags) {
+    let child = finishedWork.child;
+    while (child !== null) {
+      commitLayoutEffects(child);
+      child = child.sibling;
+    }
+  }
+  if ((finishedWork.flags & LayoutMask) !== NoFlags) {
+    const tag = finishedWork.tag;
+    if (tag === FunctionComponent || tag === SimpleMemoComponent) {
+      commitHookEffectListMount(HookLayout | HookHasEffect, finishedWork);
+    } else if (tag === HostComponent) {
+      if ((finishedWork.flags & Ref) !== NoFlags) {
+        commitAttachRef(finishedWork);
+      }
+    }
+  }
+}
+
+// ---- commit (passive phase) ----
+function commitPassiveUnmountInsideDeletedTree(fiber: FiberNode): void {
+  // deletion effects fire in parent -> child order
+  if (fiber.tag === FunctionComponent || fiber.tag === SimpleMemoComponent) {
+    commitHookEffectListUnmount(HookPassive, fiber);
+  }
+  let child = fiber.child;
+  while (child !== null) {
+    commitPassiveUnmountInsideDeletedTree(child);
+    child = child.sibling;
+  }
+}
+
+function commitPassiveUnmountOnTree(fiber: FiberNode): void {
+  if ((fiber.flags & ChildDeletion) !== NoFlags) {
+    const deletions: any = fiber.deletions;
+    if (deletions !== null) {
+      for (let i = 0; i < deletions.length; i++) {
+        commitPassiveUnmountInsideDeletedTree(deletions[i]);
+      }
+      fiber.deletions = null;
+    }
+  }
+  if ((fiber.subtreeFlags & PassiveMask) !== NoFlags) {
+    let child = fiber.child;
+    while (child !== null) {
+      commitPassiveUnmountOnTree(child);
+      child = child.sibling;
+    }
+  }
+  if ((fiber.flags & Passive) !== NoFlags &&
+      (fiber.tag === FunctionComponent || fiber.tag === SimpleMemoComponent)) {
+    commitHookEffectListUnmount(HookPassive | HookHasEffect, fiber);
+  }
+}
+
+function commitPassiveMountOnTree(fiber: FiberNode): void {
+  if ((fiber.subtreeFlags & PassiveMask) !== NoFlags) {
+    let child = fiber.child;
+    while (child !== null) {
+      commitPassiveMountOnTree(child);
+      child = child.sibling;
+    }
+  }
+  if ((fiber.flags & Passive) !== NoFlags &&
+      (fiber.tag === FunctionComponent || fiber.tag === SimpleMemoComponent)) {
+    commitHookEffectListMount(HookPassive | HookHasEffect, fiber);
   }
 }
 
@@ -1199,6 +1797,31 @@ let workInProgress: FiberNode | null = null;
 let isBatching = false;
 let isRendering = false;
 let pendingRoot: FiberRootNode | null = null;
+let rootWithPendingPassive: FiberRootNode | null = null;
+
+// React: flushPassiveEffectsImpl — unmount pass then mount pass over the
+// committed tree; sync updates scheduled by passive effects flush at the end
+// (flushSyncCallbacks).
+function flushPassiveEffectsImpl(): boolean {
+  const root = rootWithPendingPassive;
+  if (root === null) {
+    return false;
+  }
+  rootWithPendingPassive = null;
+  const wasBatching = isBatching;
+  isBatching = true;
+  commitPassiveUnmountOnTree(root.current);
+  commitPassiveMountOnTree(root.current);
+  isBatching = wasBatching;
+  if (!wasBatching) {
+    const r = pendingRoot;
+    pendingRoot = null;
+    if (r !== null) {
+      performSyncWorkOnRoot(r);
+    }
+  }
+  return true;
+}
 
 function scheduleUpdateOnFiber(fiber: FiberNode): void {
   fiber.lanes |= SyncLane;
@@ -1228,6 +1851,8 @@ function scheduleUpdateOnFiber(fiber: FiberNode): void {
 }
 
 function flushSyncImpl(fn: any): void {
+  // React: flushSync flushes pending passive effects before the update.
+  flushPassiveEffectsImpl();
   isBatching = true;
   fn();
   isBatching = false;
@@ -1266,6 +1891,8 @@ function performUnitOfWork(unitOfWork: FiberNode): void {
 }
 
 function performSyncWorkOnRoot(root: FiberRootNode): void {
+  // React: performSyncWorkOnRoot flushes pending passive effects first.
+  flushPassiveEffectsImpl();
   isRendering = true;
   const rootWip = createWorkInProgress(root.current, null);
   workInProgress = rootWip;
@@ -1273,17 +1900,25 @@ function performSyncWorkOnRoot(root: FiberRootNode): void {
     performUnitOfWork(workInProgress);
   }
   isRendering = false;
-  if (supportsPersistence) {
-    if ((rootWip.flags & Update) !== NoFlags) {
-      hcReplaceContainerChildren(root.containerInfo, root.pendingChildren);
-      rootWip.flags &= ~Update;
-    }
-  } else {
-    commitMutationEffectsOnFiber(rootWip, root);
-  }
+  // Commit. Updates scheduled by layout effects are deferred and flushed at
+  // the end (React: flushSyncCallbacks at the end of commitRootImpl); passive
+  // effects stay pending until flushPassiveEffectsImpl.
+  const wasBatching = isBatching;
+  isBatching = true;
+  commitMutationEffectsOnFiber(rootWip, root);
   root.current = rootWip;
-  // updates scheduled during render/commit would be in pendingRoot; none in
-  // this app (no useEffect / render-phase updates).
+  commitLayoutEffects(rootWip);
+  if (((rootWip.flags | rootWip.subtreeFlags) & PassiveMask) !== NoFlags) {
+    rootWithPendingPassive = root;
+  }
+  isBatching = wasBatching;
+  if (!wasBatching) {
+    const r = pendingRoot;
+    pendingRoot = null;
+    if (r !== null) {
+      performSyncWorkOnRoot(r);
+    }
+  }
 }
 
 // ---- public API ----

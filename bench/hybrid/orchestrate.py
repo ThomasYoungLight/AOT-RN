@@ -55,7 +55,10 @@ def extract_checksum(output, who):
     m = re.search(r"checksum=(\d+)", output)
     if not m:
         sys.exit(f"GATE FAIL: no checksum in {who} output:\n{output[-500:]}")
-    return m.group(1)
+    fx = re.search(r"fx=(-?\d+)", output)
+    if not fx:
+        sys.exit(f"GATE FAIL: no fx (effect-order checksum) in {who} output:\n{output[-500:]}")
+    return m.group(1) + "/" + fx.group(1)
 
 
 def main():

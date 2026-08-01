@@ -57,9 +57,17 @@ var appApi = installFeedApp({
   useState: React.useState,
   useCallback: React.useCallback,
   memo: React.memo,
+  useReducer: React.useReducer,
+  useMemo: React.useMemo,
+  useRef: React.useRef,
+  useEffect: React.useEffect,
+  useLayoutEffect: React.useLayoutEffect,
+  createContext: React.createContext,
+  useContext: React.useContext,
 });
+var flushPassive = function () { R.flushPassiveEffects(); };
 
-var driver = runFeedDriver(appApi, function (fn) { R.flushSync(fn); }, log);
+var driver = runFeedDriver(appApi, function (fn) { R.flushSync(fn); }, flushPassive, log);
 
 var rootContainer = {id: 0, type: 'root', children: []};
 var root = R.createContainer(
@@ -73,6 +81,8 @@ R.flushSync(function () {
   );
 });
 
+flushPassive();
+
 driver.warmup();
 hostStatsReset();
 
@@ -81,7 +91,7 @@ var gcs0 = (typeof HermesInternal !== 'undefined' && HermesInternal.getInstrumen
 var res = driver.run();
 
 log('real-react-reconciler(18.3.1): ' + res.ticks + ' interactions, ' + res.posts + ' posts');
-log(hostStatsLine());
+log(hostStatsLine() + ' fx=' + res.fx);
 log('TOTAL: ' + res.ms + ' ms  (' + (res.ms / res.ticks).toFixed(4) + ' ms/interaction)');
 if (gcs0 !== null) {
   var gcs1 = HermesInternal.getInstrumentedStats();

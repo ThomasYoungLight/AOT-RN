@@ -552,6 +552,29 @@ Open cost question (unmeasured): startup evaluation of the 6.5 MB ring-1 unit an
 
 Artifacts: per-call hash in `hybrid-serializer.js`; policy/probe/per-platform units in `build-rn-registry.py`; per-platform manifest passes in `orchestrate.py`; `ring1` SHUnit replaces `util` in `ReactInstance.cpp`/CMake/xcconfig; grouped dispatch log in `HybridAOTDemo.js`.
 
+### Experiment 15 (2026-08-02): typed reconciler feature surface — hooks, context, effects, refs
+
+The typed port now covers the "every real app uses these" React surface, each piece verified against the real react-reconciler on a feature-extended workload in BOTH host modes: **useReducer / useMemo / useRef**, **createContext / useContext / Provider** (value stack, `readContext` dependency lists, `propagateContextChange` through memo-bailed subtrees), **useEffect / useLayoutEffect** (circular effect lists, HookFlags, mutation-phase layout destroys, layout-phase mounts, deletion-inline destroys, `flushPassiveEffects` with React's exact flush points — start of `flushSync`/`performSyncWorkOnRoot`, sync-callback flush at the end of passive and commit for effect-scheduled setState), and **host refs** (object + function, `Ref` flag, mutation-phase detach / layout-phase attach, deletion detach).
+
+**Verification got a second axis.** The recording host only sees host mutations; effects/memo callbacks are invisible to it. The workload now feeds `fx` — an app-level rolling checksum mixed by every effect create/destroy and memo recompute in call order — printed alongside the host checksum and enforced by the orchestrator gate. The extended feed app exercises: theme context toggles consumed by 200 memoized cards, reducer + memo + ref in the header, four effect flavors with cleanups (including effects on cards that mount/unmount with the feed), a layout-effect setState and a passive-effect setState (commit-tail and passive-tail sync flush paths), and a stable function ref on the footer.
+
+Result: **all four accumulators identical** — mutation mode `checksum=2539688126 fx=796176228`, persistence mode `checksum=2086907373 fx=796176228` (77,928 clones — context propagation drives heavy clone traffic through memo bailouts), reproduced on-device on both phones.
+
+**The harness caught two real bugs on the way:**
+1. Three typed-subset freezes (new catalog entry): class fields mutated only through `any`-references (`FCUpdateQueue.lastEffect`, effect `next`/`destroy`, `context._currentValue`, `ref.current`) compile as frozen — such structures must be `mkObj()` dynamics, not classes.
+2. A genuine semantic divergence: `bubbleProperties` must bubble only *static* flags when the fiber **bailed out** (`didBailout` — React's exact rule); bubbling child flags unconditionally leaks stale `Ref`/`Passive`/`Update` flags into `subtreeFlags` and re-fires ref attaches and effects on bailed subtrees. Host stream stayed identical; only `fx` exposed it — the second axis paying for itself immediately.
+
+| Extended workload (2000 interactions) | interp | untyped native | typed native |
+|---|---|---|---|
+| mutation mode, host (ms/int) | 0.750 | 0.556 (1.35×) | **0.409 (1.84×)** |
+| persistence mode, host (ms/int) | 0.826 | — | **0.477 (1.73×)** |
+| S23 Ultra, in-app ring 0 (ms/int) | 1.108 (OTA) | — | **0.697 (1.59×)** |
+| iPhone 15 Pro Max, in-app ring 0 (ms/int) | — | — | **0.443** |
+
+The typed advantage holds with the full feature surface (1.84× vs Exp 10's 1.78× on the plain workload) — effect bookkeeping and context propagation are fiber-structure work, exactly where typed layouts pay. Live Fabric surface unaffected (persistent consts still flip cleanly; 0.368/0.162 ms/commit). Still not ported: Suspense/lazy, insertion effects, forwardRef, class components, concurrent lanes.
+
+Artifacts: hooks/context/effects/refs in `typed-port-core.ts` (+~600 lines); extended `feed-app.inc.js` (+fx checksum, trace mode, env-tunable driver); all five harnesses pass the full RA surface + explicit `flushPassive`; orchestrator gate compares `checksum` AND `fx`.
+
 ### Rejected alternatives
 
 - **Dual engine / native core + JS islands** (Valdi-style): two heaps, serialization at every boundary, function-identity hazards.

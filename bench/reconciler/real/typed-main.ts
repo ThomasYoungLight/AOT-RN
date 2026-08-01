@@ -7,9 +7,19 @@ function typedMain(): void {
   RA.useState = useStateImpl;
   RA.useCallback = useCallbackImpl;
   RA.memo = memoImpl;
+  RA.useReducer = useReducerImpl;
+  RA.useMemo = useMemoImpl;
+  RA.useRef = useRefImpl;
+  RA.useEffect = useEffectImpl;
+  RA.useLayoutEffect = useLayoutEffectImpl;
+  RA.createContext = createContextImpl;
+  RA.useContext = useContextImpl;
 
   const appApi: any = installFeedApp(RA);
-  const driver: any = runFeedDriver(appApi, flushSyncImpl, print);
+  const flushPassive: any = function (): void {
+    flushPassiveEffectsImpl();
+  };
+  const driver: any = runFeedDriver(appApi, flushSyncImpl, flushPassive, print);
 
   const container: any = new G.Object();
   container.id = 0;
@@ -22,6 +32,7 @@ function typedMain(): void {
   flushSyncImpl(function (): void {
     renderIntoRoot(root, createElementImpl(appApi.App, rootProps, undefined, undefined, undefined));
   });
+  flushPassiveEffectsImpl();
 
   driver.warmup();
   hostStatsReset();
@@ -33,7 +44,7 @@ function typedMain(): void {
   const res: any = driver.run();
 
   print('typed-port-reconciler(18.3-port): ' + String(res.ticks) + ' interactions, ' + String(res.posts) + ' posts');
-  print(hostStatsLine());
+  print(hostStatsLine() + ' fx=' + String(res.fx));
   print('TOTAL: ' + String(res.ms) + ' ms  (' + String(res.ms / res.ticks) + ' ms/interaction)');
   if (gcs0 !== null) {
     const gcs1: any = HermesInternal.getInstrumentedStats();

@@ -11,8 +11,18 @@ function makeTypedCoreExports(): any {
     RA.useState = useStateImpl;
     RA.useCallback = useCallbackImpl;
     RA.memo = memoImpl;
+    RA.useReducer = useReducerImpl;
+    RA.useMemo = useMemoImpl;
+    RA.useRef = useRefImpl;
+    RA.useEffect = useEffectImpl;
+    RA.useLayoutEffect = useLayoutEffectImpl;
+    RA.createContext = createContextImpl;
+    RA.useContext = useContextImpl;
     const appApi: any = installFeedApp(RA);
-    const driver: any = runFeedDriver(appApi, flushSyncImpl, null);
+    const flushPassive: any = function (): void {
+      flushPassiveEffectsImpl();
+    };
+    const driver: any = runFeedDriver(appApi, flushSyncImpl, flushPassive, null);
     const container: any = new G.Object();
     container.id = 0;
     container.type = 'root';
@@ -23,6 +33,7 @@ function makeTypedCoreExports(): any {
     flushSyncImpl(function (): void {
       renderIntoRoot(root, createElementImpl(appApi.App, rootProps, undefined, undefined, undefined));
     });
+    flushPassiveEffectsImpl();
     driver.warmup();
     hostStatsReset();
     const res: any = driver.run();
@@ -31,7 +42,7 @@ function makeTypedCoreExports(): any {
     out.ms = res.ms;
     out.ticks = res.ticks;
     out.posts = res.posts;
-    out.host = hostStatsLine();
+    out.host = hostStatsLine() + ' fx=' + String(res.fx);
     return out;
   };
   return api;
