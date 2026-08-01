@@ -1,0 +1,32 @@
+# cloned upstream repos (have their own git)
+/perry/
+/perry-react/
+/scriptc/
+/valdi/
+/react-native/
+/hermes/
+
+# build outputs & binaries
+node_modules/
+out/
+*.o
+*.hbc
+*.a
+*.dylib
+*.so
+*.app/
+bench/**/*-native
+bench/**/*-android
+bench/**/*-ios
+bench/reconciler/real/real-react-bundle.js
+bench/reconciler/real/entry.cjs
+bench/reconciler/real/twin-entry.cjs
+bench/reconciler/real/typed-entry.ts
+bench/reconciler/real/rr_hbc.h
+bench/reconciler/real/interp_rr_main.cpp
+bench/reconciler/real/package.json
+bench/reconciler/real/package-lock.json
+bench/ios/bench_hbc.h
+bench/ios/bench2_hbc.h
+bench/reconciler/minireact_hbc.h
+bench/reconciler/interp_minireact_main.cpp

@@ -1,0 +1,149 @@
+// Recording host config — shared verbatim by the real react-reconciler
+// baseline and the typed port. Every host mutation feeds a rolling checksum;
+// equivalence of the two reconcilers is asserted on (opCounts, checksum).
+// Prop diffing lives here (as in React Native's ViewConfig diffing).
+
+var hostStats = {
+  creates: 0,
+  textCreates: 0,
+  appends: 0,
+  inserts: 0,
+  removes: 0,
+  updates: 0,
+  textUpdates: 0,
+  checksum: 0,
+};
+var nextInstanceId = 1;
+
+function mix(n) {
+  var ni = coerceInt(n);
+  hostStats.checksum = ((hostStats.checksum * 31 + ni) | 0) >>> 0 | 0;
+}
+
+function hashStr(s) {
+  var h = 0;
+  var n = coerceInt(s.length);
+  for (var i = 0; i < n; i++) {
+    h = (h * 33 + coerceInt(s.charCodeAt(i))) | 0;
+  }
+  return h;
+}
+
+function hashVal(v) {
+  if (v === null || v === undefined) return 3;
+  if (typeof v === 'number') return coerceInt(v);
+  if (typeof v === 'boolean') return v ? 7 : 11;
+  if (typeof v === 'string') return hashStr(v);
+  return 13; // functions/objects: identity not hashable, count as opaque
+}
+
+function diffHostProps(oldProps, newProps) {
+  var payload = anyNull();
+  for (var k in oldProps) {
+    if (k === 'children') continue;
+    if (!(k in newProps)) {
+      if (payload === null) payload = mkList();
+      payload.push(k, null);
+    }
+  }
+  for (var k2 in newProps) {
+    if (k2 === 'children') continue;
+    if (oldProps[k2] !== newProps[k2]) {
+      if (payload === null) payload = mkList();
+      payload.push(k2, newProps[k2]);
+    }
+  }
+  return payload;
+}
+
+function hcCreateInstance(type, props) {
+  hostStats.creates++;
+  var inst = {id: nextInstanceId++, type: type, props: props, children: mkList()};
+  mix(1);
+  mix(hashStr(type));
+  return inst;
+}
+
+function hcCreateTextInstance(txt) {
+  hostStats.textCreates++;
+  var inst = {id: nextInstanceId++, type: '#text', text: txt, children: null};
+  mix(2);
+  mix(hashStr(txt));
+  return inst;
+}
+
+function hcAppendChild(parent, child) {
+  hostStats.appends++;
+  var idx = parent.children.indexOf(child);
+  if (idx !== -1) parent.children.splice(idx, 1);
+  parent.children.push(child);
+  mix(4);
+  mix(child.id);
+}
+
+function hcInsertBefore(parent, child, beforeChild) {
+  hostStats.inserts++;
+  var idx = parent.children.indexOf(child);
+  if (idx !== -1) parent.children.splice(idx, 1);
+  var at = parent.children.indexOf(beforeChild);
+  parent.children.splice(at, 0, child);
+  mix(5);
+  mix(child.id);
+  mix(beforeChild.id);
+}
+
+function hcRemoveChild(parent, child) {
+  hostStats.removes++;
+  var idx = parent.children.indexOf(child);
+  if (idx !== -1) parent.children.splice(idx, 1);
+  mix(6);
+  mix(child.id);
+}
+
+function hcCommitUpdate(inst, payload, newProps) {
+  hostStats.updates++;
+  inst.props = newProps;
+  mix(7);
+  mix(inst.id);
+  for (var i = 0; i < payload.length; i += 2) {
+    mix(hashStr(payload[i]));
+    mix(hashVal(payload[i + 1]));
+  }
+}
+
+function hcCommitTextUpdate(inst, oldText, newText) {
+  hostStats.textUpdates++;
+  inst.text = newText;
+  mix(8);
+  mix(inst.id);
+  mix(hashStr(newText));
+}
+
+function hostStatsLine() {
+  return (
+    'host: creates=' + String(hostStats.creates) +
+    ' textCreates=' + String(hostStats.textCreates) +
+    ' appends=' + String(hostStats.appends) +
+    ' inserts=' + String(hostStats.inserts) +
+    ' removes=' + String(hostStats.removes) +
+    ' updates=' + String(hostStats.updates) +
+    ' textUpdates=' + String(hostStats.textUpdates) +
+    ' checksum=' + String(hostStats.checksum >>> 0)
+  );
+}
+
+function hcResetAll() {
+  nextInstanceId = 1;
+  hostStatsReset();
+}
+
+function hostStatsReset() {
+  hostStats.creates = 0;
+  hostStats.textCreates = 0;
+  hostStats.appends = 0;
+  hostStats.inserts = 0;
+  hostStats.removes = 0;
+  hostStats.updates = 0;
+  hostStats.textUpdates = 0;
+  hostStats.checksum = 0;
+}
