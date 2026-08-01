@@ -577,6 +577,32 @@ Artifacts: hooks/context/effects/refs in `typed-port-core.ts` (+~600 lines); ext
 
 *(Follow-up polish: the live-Fabric takeover surface now handles system bars itself — `StatusBar.setBarStyle` + real status-bar inset + bottom-inset padding with list clipping, passed through `env.insetTop/insetBottom` — since RNTester's AppContainer/safe-area plumbing never runs under the takeover; previously content drew behind the Android gesture bar. A production integration would plumb real WindowInsets through the surface.)*
 
+### Experiment 16 (2026-08-02): ring-1 cost model — measured, and answered with profile-guided selection
+
+The open question from Experiment 14: what does compile-everything ring 1 actually cost, and what should a production policy compile? Both halves answered on-device.
+
+**The costs, measured (Android arm64, stripped `libreactnative.so` / release APK; iOS app binary).** Instrumentation: `std::chrono` around each `evaluateSHUnit` in ReactInstance, exposed to JS as `global.__hybridEvalMs`.
+
+| ring-1 variant | modules | lib / binary | APK | Δ vs none | ring1 eval |
+|---|---|---|---|---|---|
+| Android — none | 0 | 7,273,184 | 21,899,886 | — | — |
+| Android — profiled | 199 | 10,835,960 | 25,462,662 | **+3.56 MB** | 1.4 ms |
+| Android — full | 257 | 11,400,648 | 26,027,350 | **+4.13 MB** | 1.1 ms |
+| iOS — profiled | 204 | 16,608,352 | — | −0.78 MB vs full | 0.9 ms |
+| iOS — full | 264 | 17,385,648 | — | — | 1.6 ms |
+
+Two findings kill one worry and confirm the other:
+- **Startup eval is a non-issue**: evaluating a ~250-module, 6.5 MB unit takes ~1 ms — unit evaluation only registers factory closures in `__nativeModules`; the code pages mmap in on demand. No lazy-eval disadvantage vs bytecode worth engineering around.
+- **Binary size is THE cost**: ~2.0× the transformed JS source on Android (4.13 MB for 2.07 MB of JS), ~2.7–3.7× marginal per module. Every module compiled that never executes is pure dead weight.
+
+**The policy: profile-guided selection (PGO-lite).** The dispatch prelude now wraps each factory to record which modules actually EXECUTE (first require), in order — stable path-hash ids make the profile durable across builds. The demo dumps the profile to the log; extracted into `bench/hybrid/profiles/rn-tester-startup-<platform>.json`; `build-rn-registry.py` then compiles only executed candidates per platform (`--ring1-all` overrides; missing profile falls back to compile-all, which is exactly what a capture run needs). The cold tail stays ring 2 — the interpreted fallback IS the lazy path.
+
+On RNTester: 199/257 (Android) and 204/264 (iOS) candidates executed at startup — a modest 22% drop (0.56 MB), because RNTesterList eagerly imports every example screen; **RNTester is a worst case for this policy**. An app with lazy navigation would shed most of its screens' native weight while keeping the startup path compiled. Validated on both phones: `native=201/206`, everything boots, fabric surface unchanged (0.355 / 0.149 ms/commit).
+
+Bonus fail-safe sighting: mid-experiment, a bundle newer than the unit correctly showed `shadowed-ota-changed=1 (js/HybridAOTDemo.js)` — the hash dispatch protecting against a stale unit yet again.
+
+Artifacts: eval timing + `__hybridEvalMs` in `ReactInstance.cpp`; execution recorder in `hybrid-serializer.js` prelude; profile dump in `HybridAOTDemo.js`; `load_profile`/selection in `build-rn-registry.py`; checked-in profiles under `bench/hybrid/profiles/`; ring-1 `.o` now independently optional in CMake.
+
 ### Rejected alternatives
 
 - **Dual engine / native core + JS islands** (Valdi-style): two heaps, serialization at every boundary, function-identity hazards.

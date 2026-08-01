@@ -11,6 +11,14 @@ ring 1 (ring1 unit): POLICY-SELECTED product modules, transformed Metro
     isolated shermes compile; the passes are batched into one unit, the
     failures stay interpreted (they are ring 2 by construction).
 
+    PROFILE-GUIDED selection: when profiles/rn-tester-startup-<platform>.json
+    exists, only candidates whose stable module id appears in the captured
+    startup execution profile are compiled — native code for modules that
+    never execute is pure binary-size dead weight, and the interpreted
+    fallback covers the cold tail lazily. Pass --ring1-all to override and
+    compile every probe-passing candidate (also the fallback when no profile
+    has been captured yet).
+
 Units are PER-PLATFORM: Metro transforms differ between android and ios
 (Platform.OS inlining, .android/.ios variants), so each platform's units are
 keyed to that platform's own manifest hashes. Pass --ios to also build the
@@ -106,13 +114,39 @@ def probe_one(item):
     return mod_id, ok, reason
 
 
+PROFILES = ROOT / "profiles"
+
+
+def load_profile(platform):
+    if "--ring1-all" in sys.argv:
+        return None
+    p = PROFILES / f"rn-tester-startup-{platform}.json"
+    if not p.exists():
+        print(f"ring1[{platform}]: no startup profile at {p} — compiling ALL probe passes")
+        return None
+    data = json.loads(p.read_text())
+    ids = set(str(i) for i in data["executed_ids"])
+    print(f"ring1[{platform}]: startup profile {p.name}: {len(ids)} executed modules")
+    return ids
+
+
 def build_ring1_source(manifest, platform):
-    candidates = [
+    all_candidates = [
         (mod_id, entry)
         for mod_id, entry in manifest.items()
         if any(rx.search(entry["path"]) for rx in RING1_INCLUDE)
         and not any(rx.search(entry["path"]) for rx in RING1_EXCLUDE)
     ]
+    profile = load_profile(platform)
+    if profile is None:
+        candidates = all_candidates
+    else:
+        candidates = [(m, e) for m, e in all_candidates if str(m) in profile]
+        dropped = len(all_candidates) - len(candidates)
+        kb_all = sum(len(e["code"]) for _, e in all_candidates) // 1024
+        kb_sel = sum(len(e["code"]) for _, e in candidates) // 1024
+        print(f"ring1[{platform}]: profile-guided: {len(candidates)}/{len(all_candidates)} "
+              f"candidates selected ({kb_sel}/{kb_all} KB source), {dropped} cold modules stay ring 2")
     print(f"ring1[{platform}]: {len(candidates)} candidates under policy "
           f"{[rx.pattern for rx in RING1_INCLUDE]}")
     passed, failed = [], []

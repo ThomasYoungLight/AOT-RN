@@ -1,7 +1,7 @@
 From 4709e32b34d229e0805d679b6fb916bf4161af96 Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 00:28:57 +0800
-Subject: [PATCH 1/5] Hybrid AOT prototype: SHUnit ring dispatch in RN
+Subject: [PATCH 1/6] Hybrid AOT prototype: SHUnit ring dispatch in RN
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -6784,7 +6784,7 @@ index 9546a3b..1a95bf5 100644
 From 90c186ac1d579ad45326e2a4e9e7a78ce3da1ce7 Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 01:35:19 +0800
-Subject: [PATCH 2/5] Live Fabric surface driven by the hybrid ring-0
+Subject: [PATCH 2/6] Live Fabric surface driven by the hybrid ring-0
  reconciler
 
 HybridFabricDemo takes over the RNTester root surface and binds the ring-0
@@ -13098,7 +13098,7 @@ index 3b5031b..ddd11e6 100644
 From cca4e6fc09f7531dc6462fe92024c2f52c4f38cf Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 02:05:18 +0800
-Subject: [PATCH 3/5] Hash-per-__d-call dispatch + policy-selected ring-1 unit
+Subject: [PATCH 3/6] Hash-per-__d-call dispatch + policy-selected ring-1 unit
 
 The serializer appends each module's content hash to its own __d call (no
 central __moduleHashes table) so modules stay self-describing under
@@ -13301,7 +13301,7 @@ index f850b93..fbd66a8 100644
 From a82cde03e0551bd538e1e215fd1b43322c1d0f08 Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 02:48:45 +0800
-Subject: [PATCH 4/5] Rebuilt ring-0 twins with the feature-extended reconciler
+Subject: [PATCH 4/6] Rebuilt ring-0 twins with the feature-extended reconciler
  workload
 
 
@@ -13624,7 +13624,7 @@ index ddd11e6..0d155ae 100644
 From 647462dd17f2117a3841da521aa0e121cf2f947f Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 03:05:20 +0800
-Subject: [PATCH 5/5] Fabric takeover demo: handle system bars (edge-to-edge
+Subject: [PATCH 5/6] Fabric takeover demo: handle system bars (edge-to-edge
  insets)
 
 The takeover surface bypasses AppContainer/safe-area plumbing, so the glue
@@ -13707,6 +13707,178 @@ index 0fc3fac..5fb4d49 100644
        rootHandle,
        null,
        null
+-- 
+2.50.1 (Apple Git-155)
+
+
+From a676bee2bf0b6924b1665a4ed1eaa7848e344676 Mon Sep 17 00:00:00 2001
+From: Thomas <thomas.wang@ponyft.com>
+Date: Sun, 2 Aug 2026 03:32:46 +0800
+Subject: [PATCH 6/6] Ring-1 cost instrumentation: eval timing +
+ factory-execution recorder
+
+evaluateSHUnit wrapped in chrono, exposed as global.__hybridEvalMs (glog is
+invisible in Android release logcat); the dispatch prelude wraps factories
+to record the startup execution set (stable-id profile); demo dumps the
+profile in chunks; ring-1 .o independently optional in CMake.
+
+
+---
+ .../ReactAndroid/src/main/jni/CMakeLists.txt  | 10 ++++---
+ .../react/runtime/ReactInstance.cpp           | 27 ++++++++++++++-----
+ packages/rn-tester/hybrid-serializer.js       | 18 ++++++++++---
+ packages/rn-tester/js/HybridAOTDemo.js        | 20 ++++++++++++++
+ 4 files changed, 61 insertions(+), 14 deletions(-)
+
+diff --git a/packages/react-native/ReactAndroid/src/main/jni/CMakeLists.txt b/packages/react-native/ReactAndroid/src/main/jni/CMakeLists.txt
+index dc9389d..bb1a9f2 100644
+--- a/packages/react-native/ReactAndroid/src/main/jni/CMakeLists.txt
++++ b/packages/react-native/ReactAndroid/src/main/jni/CMakeLists.txt
+@@ -265,12 +265,14 @@ target_merge_so(reactnative)
+ # build of this project.
+ set(RN_HYBRID_SHUNIT_DIR "/Users/bm/Documents/code/AOT-RN/bench/hybrid/out/rn")
+ if(ANDROID_ABI STREQUAL "arm64-v8a"
+-   AND EXISTS "${RN_HYBRID_SHUNIT_DIR}/core_unit_rn.o"
+-   AND EXISTS "${RN_HYBRID_SHUNIT_DIR}/ring1_unit_rn.o")
++   AND EXISTS "${RN_HYBRID_SHUNIT_DIR}/core_unit_rn.o")
+   message(STATUS "Hybrid AOT: linking registry SHUnits from ${RN_HYBRID_SHUNIT_DIR}")
+   target_sources(reactnative PRIVATE
+-          "${RN_HYBRID_SHUNIT_DIR}/core_unit_rn.o"
+-          "${RN_HYBRID_SHUNIT_DIR}/ring1_unit_rn.o")
++          "${RN_HYBRID_SHUNIT_DIR}/core_unit_rn.o")
++  if(EXISTS "${RN_HYBRID_SHUNIT_DIR}/ring1_unit_rn.o")
++    target_sources(reactnative PRIVATE
++            "${RN_HYBRID_SHUNIT_DIR}/ring1_unit_rn.o")
++  endif()
+   if(EXISTS "${RN_HYBRID_SHUNIT_DIR}/fabric_unit_rn.o")
+     target_sources(reactnative PRIVATE
+             "${RN_HYBRID_SHUNIT_DIR}/fabric_unit_rn.o")
+diff --git a/packages/react-native/ReactCommon/react/runtime/ReactInstance.cpp b/packages/react-native/ReactCommon/react/runtime/ReactInstance.cpp
+index 1881e7f..c482f08 100644
+--- a/packages/react-native/ReactCommon/react/runtime/ReactInstance.cpp
++++ b/packages/react-native/ReactCommon/react/runtime/ReactInstance.cpp
+@@ -23,6 +23,7 @@
+ #include <react/timing/primitives.h>
+ #include <react/utils/jsi-utils.h>
+ #include <iostream>
++#include <chrono>
+ #include <memory>
+ #include <utility>
+ 
+@@ -309,19 +310,31 @@ void ReactInstance::loadScript(
+                   return jsi::Value::undefined();
+                 });
+             runtime.global().setProperty(runtime, "__hybridLog", hybridLog);
++            // Per-unit evaluation timing, exposed to JS as
++            // global.__hybridEvalMs (glog is not visible in logcat on
++            // Android release builds).
++            auto evalStats = jsi::Object(runtime);
++            auto evalUnit = [&](const char* name, SHUnit* (*unit)(void)) {
++              auto t0 = std::chrono::steady_clock::now();
++              hybridAPI->evaluateSHUnit(unit);
++              auto ms = std::chrono::duration<double, std::milli>(
++                            std::chrono::steady_clock::now() - t0)
++                            .count();
++              LOG(WARNING) << "ReactInstance: hybrid AOT evaluateSHUnit("
++                           << name << ") took " << ms << " ms";
++              evalStats.setProperty(runtime, name, ms);
++            };
+             if (sh_export_core != nullptr) {
+-              LOG(WARNING) << "ReactInstance: hybrid AOT evaluateSHUnit(core)";
+-              hybridAPI->evaluateSHUnit(sh_export_core);
++              evalUnit("core", sh_export_core);
+             }
+             if (sh_export_ring1 != nullptr) {
+-              LOG(WARNING) << "ReactInstance: hybrid AOT evaluateSHUnit(ring1)";
+-              hybridAPI->evaluateSHUnit(sh_export_ring1);
++              evalUnit("ring1", sh_export_ring1);
+             }
+             if (sh_export_fabriccore != nullptr) {
+-              LOG(WARNING)
+-                  << "ReactInstance: hybrid AOT evaluateSHUnit(fabriccore)";
+-              hybridAPI->evaluateSHUnit(sh_export_fabriccore);
++              evalUnit("fabriccore", sh_export_fabriccore);
+             }
++            runtime.global().setProperty(
++                runtime, "__hybridEvalMs", evalStats);
+           } else {
+             LOG(WARNING)
+                 << "ReactInstance: hybrid AOT SHUnits present but runtime is not Hermes";
+diff --git a/packages/rn-tester/hybrid-serializer.js b/packages/rn-tester/hybrid-serializer.js
+index fcf746f..decf4b6 100644
+--- a/packages/rn-tester/hybrid-serializer.js
++++ b/packages/rn-tester/hybrid-serializer.js
+@@ -85,17 +85,29 @@ function buildDispatchPrelude() {
+     '  if (typeof orig !== "function") { return; }\n' +
+     '  var bindings = {};\n' +
+     '  g.__hybridBindings = bindings;\n' +
++    '  var executed = {};\n' +
++    '  var execSeq = 0;\n' +
++    '  g.__hybridExecuted = executed;\n' +
+     '  g.__d = function (factory, id, deps, hash) {\n' +
+     '    var native = g.__nativeModules;\n' +
+     '    var n = native && hash != null ? native[id] : null;\n' +
++    '    var chosen = factory;\n' +
+     '    if (n) {\n' +
+     '      if (n.hash === hash) {\n' +
+     "        bindings[id] = {binding: 'native', path: n.path};\n" +
+-    '        return orig(n.factory, id, deps);\n' +
++    '        chosen = n.factory;\n' +
++    '      } else {\n' +
++    "        bindings[id] = {binding: 'shadowed-ota-changed', path: n.path};\n" +
+     '      }\n' +
+-    "      bindings[id] = {binding: 'shadowed-ota-changed', path: n.path};\n" +
+     '    }\n' +
+-    '    return orig(factory, id, deps);\n' +
++    '    // execution recorder: which factories actually RUN (first require),\n' +
++    '    // in order — the startup profile that drives ring-1 selection. Module\n' +
++    '    // ids are stable path hashes, so an id list is a durable profile.\n' +
++    '    var wrapped = function () {\n' +
++    '      executed[id] = execSeq++;\n' +
++    '      return chosen.apply(this, arguments);\n' +
++    '    };\n' +
++    '    return orig(wrapped, id, deps);\n' +
+     '  };\n' +
+     "})(typeof globalThis !== 'undefined' ? globalThis : this);"
+   );
+diff --git a/packages/rn-tester/js/HybridAOTDemo.js b/packages/rn-tester/js/HybridAOTDemo.js
+index fbd66a8..3573e73 100644
+--- a/packages/rn-tester/js/HybridAOTDemo.js
++++ b/packages/rn-tester/js/HybridAOTDemo.js
+@@ -23,6 +23,9 @@ function runDemo() {
+     }
+   };
+   hlog('=== [HybridAOT] demo start (Metro plugin) ===');
++  if (g.__hybridEvalMs != null) {
++    hlog('[HybridAOT] SHUnit eval ms: ' + JSON.stringify(g.__hybridEvalMs));
++  }
+   hlog(
+     '[HybridAOT] __nativeModules: ' +
+       (g.__nativeModules
+@@ -55,6 +58,23 @@ function runDemo() {
+             .join('; ')),
+   );
+ 
++  // Startup execution profile: module ids whose factories have RUN by now,
++  // in execution order. Extracted from the log into bench/hybrid/profiles/
++  // to drive profile-guided ring-1 selection.
++  const executed = g.__hybridExecuted || {};
++  const execIds = Object.keys(executed);
++  execIds.sort((a, b) => executed[a] - executed[b]);
++  hlog('[HybridAOT] executed: ' + execIds.length + ' module factories');
++  const CHUNK = 200;
++  for (let c = 0; c < execIds.length; c += CHUNK) {
++    hlog(
++      '[HybridAOT] profile[' +
++        c / CHUNK +
++        ']: ' +
++        execIds.slice(c, c + CHUNK).join(','),
++    );
++  }
++
+   hlog(
+     '[HybridAOT] util.tag()=' +
+       util.tag() +
 -- 
 2.50.1 (Apple Git-155)
 
