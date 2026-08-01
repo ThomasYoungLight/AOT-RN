@@ -24,6 +24,8 @@ function makeTypedFabricExports(): any {
     fabricState.root = root;
     const rootProps: any = new G.Object();
     rootProps.banner = env.banner;
+    rootProps.insetTop = env.insetTop;
+    rootProps.insetBottom = env.insetBottom;
     flushSyncImpl(function (): void {
       renderIntoRoot(root, createElementImpl(appApi.App, rootProps, undefined, undefined, undefined));
     });

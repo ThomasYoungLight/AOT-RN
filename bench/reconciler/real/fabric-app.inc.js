@@ -74,12 +74,16 @@ function installFabricApp(RA) {
 
     var listStyle = mkObj();
     listStyle.flex = 1;
+    listStyle.overflow = 'hidden';
     var list = h('RCTView', {style: listStyle}, rows);
 
     var rootStyle = mkObj();
     rootStyle.flex = 1;
     rootStyle.backgroundColor = '#eef1f6';
-    rootStyle.paddingTop = 70;
+    // The takeover surface is edge-to-edge (no AppContainer/safe-area
+    // plumbing runs); the glue passes system-bar insets through env.
+    rootStyle.paddingTop = anyVal(props.insetTop !== undefined ? props.insetTop : 62) + 8;
+    rootStyle.paddingBottom = anyVal(props.insetBottom !== undefined ? props.insetBottom : 24);
     return h('RCTView', {style: rootStyle}, header, list);
   }
 

@@ -569,11 +569,13 @@ Result: **all four accumulators identical** — mutation mode `checksum=25396881
 | mutation mode, host (ms/int) | 0.750 | 0.556 (1.35×) | **0.409 (1.84×)** |
 | persistence mode, host (ms/int) | 0.826 | — | **0.477 (1.73×)** |
 | S23 Ultra, in-app ring 0 (ms/int) | 1.108 (OTA) | — | **0.697 (1.59×)** |
-| iPhone 15 Pro Max, in-app ring 0 (ms/int) | — | — | **0.443** |
+| iPhone 15 Pro Max, in-app ring 0 (ms/int) | 0.764 (OTA) | — | **0.443 (1.72×)** |
 
 The typed advantage holds with the full feature surface (1.84× vs Exp 10's 1.78× on the plain workload) — effect bookkeeping and context propagation are fiber-structure work, exactly where typed layouts pay. Live Fabric surface unaffected (persistent consts still flip cleanly; 0.368/0.162 ms/commit). Still not ported: Suspense/lazy, insertion effects, forwardRef, class components, concurrent lanes.
 
 Artifacts: hooks/context/effects/refs in `typed-port-core.ts` (+~600 lines); extended `feed-app.inc.js` (+fx checksum, trace mode, env-tunable driver); all five harnesses pass the full RA surface + explicit `flushPassive`; orchestrator gate compares `checksum` AND `fx`.
+
+*(Follow-up polish: the live-Fabric takeover surface now handles system bars itself — `StatusBar.setBarStyle` + real status-bar inset + bottom-inset padding with list clipping, passed through `env.insetTop/insetBottom` — since RNTester's AppContainer/safe-area plumbing never runs under the takeover; previously content drew behind the Android gesture bar. A production integration would plumb real WindowInsets through the surface.)*
 
 ### Rejected alternatives
 

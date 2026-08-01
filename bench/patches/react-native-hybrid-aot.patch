@@ -1,7 +1,7 @@
 From 4709e32b34d229e0805d679b6fb916bf4161af96 Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 00:28:57 +0800
-Subject: [PATCH 1/4] Hybrid AOT prototype: SHUnit ring dispatch in RN
+Subject: [PATCH 1/5] Hybrid AOT prototype: SHUnit ring dispatch in RN
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -6784,7 +6784,7 @@ index 9546a3b..1a95bf5 100644
 From 90c186ac1d579ad45326e2a4e9e7a78ce3da1ce7 Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 01:35:19 +0800
-Subject: [PATCH 2/4] Live Fabric surface driven by the hybrid ring-0
+Subject: [PATCH 2/5] Live Fabric surface driven by the hybrid ring-0
  reconciler
 
 HybridFabricDemo takes over the RNTester root surface and binds the ring-0
@@ -13098,7 +13098,7 @@ index 3b5031b..ddd11e6 100644
 From cca4e6fc09f7531dc6462fe92024c2f52c4f38cf Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 02:05:18 +0800
-Subject: [PATCH 3/4] Hash-per-__d-call dispatch + policy-selected ring-1 unit
+Subject: [PATCH 3/5] Hash-per-__d-call dispatch + policy-selected ring-1 unit
 
 The serializer appends each module's content hash to its own __d call (no
 central __moduleHashes table) so modules stay self-describing under
@@ -13301,7 +13301,7 @@ index f850b93..fbd66a8 100644
 From a82cde03e0551bd538e1e215fd1b43322c1d0f08 Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 02:48:45 +0800
-Subject: [PATCH 4/4] Rebuilt ring-0 twins with the feature-extended reconciler
+Subject: [PATCH 4/5] Rebuilt ring-0 twins with the feature-extended reconciler
  workload
 
 
@@ -13617,6 +13617,96 @@ index ddd11e6..0d155ae 100644
    };
  }
  module.exports = { impl: "interpreted-real-react-18.3.1", run: runBenchmark };
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 647462dd17f2117a3841da521aa0e121cf2f947f Mon Sep 17 00:00:00 2001
+From: Thomas <thomas.wang@ponyft.com>
+Date: Sun, 2 Aug 2026 03:05:20 +0800
+Subject: [PATCH 5/5] Fabric takeover demo: handle system bars (edge-to-edge
+ insets)
+
+The takeover surface bypasses AppContainer/safe-area plumbing, so the glue
+now sets dark status-bar icons and passes insetTop (StatusBar.currentHeight)
+/ insetBottom estimates through env; the demo app pads and clips accordingly.
+Previously rows drew behind the Android gesture bar.
+
+
+---
+ packages/rn-tester/js/HybridFabricDemo.js        | 14 +++++++++++++-
+ packages/rn-tester/js/hybrid/HybridFabricCore.js | 10 ++++++++--
+ 2 files changed, 21 insertions(+), 3 deletions(-)
+
+diff --git a/packages/rn-tester/js/HybridFabricDemo.js b/packages/rn-tester/js/HybridFabricDemo.js
+index 1b87d13..d702c0e 100644
+--- a/packages/rn-tester/js/HybridFabricDemo.js
++++ b/packages/rn-tester/js/HybridFabricDemo.js
+@@ -14,7 +14,7 @@
+ const TAKE_OVER = true;
+ 
+ if (TAKE_OVER) {
+-  const {AppRegistry} = require('react-native');
++  const {AppRegistry, Platform, StatusBar} = require('react-native');
+   // Ensure the real view configs are registered before we resolve them.
+   require('react-native/Libraries/Components/View/ViewNativeComponent');
+   require('react-native/Libraries/Text/TextNativeComponent');
+@@ -51,11 +51,23 @@ if (TAKE_OVER) {
+         core.dispatchTouch(target, eventType, nativeEvent);
+       });
+     }
++    // The takeover surface is edge-to-edge; RNTester's AppContainer never
++    // runs, so handle the system bars here. Android's status-bar height is a
++    // real constant; the gesture-nav/home-indicator heights are estimates (a
++    // production integration would plumb WindowInsets through the surface).
++    if (Platform.OS === 'android') {
++      StatusBar.setBarStyle('dark-content');
++    }
++    const insetTop =
++      Platform.OS === 'android' ? StatusBar.currentHeight ?? 28 : 59;
++    const insetBottom = Platform.OS === 'android' ? 48 : 34;
+     const env = {
+       ui,
+       rootTag: appParameters.rootTag,
+       getViewConfig: (name: string) => ReactNativeViewConfigRegistry.get(name),
+       banner: core.impl,
++      insetTop,
++      insetBottom,
+       log: hlog,
+     };
+     core.start(env);
+diff --git a/packages/rn-tester/js/hybrid/HybridFabricCore.js b/packages/rn-tester/js/hybrid/HybridFabricCore.js
+index 0fc3fac..5fb4d49 100644
+--- a/packages/rn-tester/js/hybrid/HybridFabricCore.js
++++ b/packages/rn-tester/js/hybrid/HybridFabricCore.js
+@@ -5822,11 +5822,13 @@ function installFabricApp(RA) {
+     var header = h("RCTText", { style: headerStyle }, headerText);
+     var listStyle = mkObj();
+     listStyle.flex = 1;
++    listStyle.overflow = "hidden";
+     var list = h("RCTView", { style: listStyle }, rows);
+     var rootStyle = mkObj();
+     rootStyle.flex = 1;
+     rootStyle.backgroundColor = "#eef1f6";
+-    rootStyle.paddingTop = 70;
++    rootStyle.paddingTop = anyVal(props.insetTop !== void 0 ? props.insetTop : 62) + 8;
++    rootStyle.paddingBottom = anyVal(props.insetBottom !== void 0 ? props.insetBottom : 24);
+     return h("RCTView", { style: rootStyle }, header, list);
+   }
+   var api = mkObj();
+@@ -5962,7 +5964,11 @@ function start(env) {
+   );
+   R.flushSync(function() {
+     R.updateContainer(
+-      React.createElement(appApi.App, { banner: env.banner }),
++      React.createElement(appApi.App, {
++        banner: env.banner,
++        insetTop: env.insetTop,
++        insetBottom: env.insetBottom
++      }),
+       rootHandle,
+       null,
+       null
 -- 
 2.50.1 (Apple Git-155)
 

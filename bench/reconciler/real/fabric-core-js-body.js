@@ -72,7 +72,11 @@ function start(env) {
   );
   R.flushSync(function () {
     R.updateContainer(
-      React.createElement(appApi.App, {banner: env.banner}),
+      React.createElement(appApi.App, {
+        banner: env.banner,
+        insetTop: env.insetTop,
+        insetBottom: env.insetBottom,
+      }),
       rootHandle, null, null
     );
   });
