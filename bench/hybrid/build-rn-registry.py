@@ -52,8 +52,10 @@ def factory_expr(code):
 
 util_id, util = find("js/hybrid/HybridUtil.js")
 core_id, core = find("js/hybrid/HybridReactCore.js")
+fabric_id, fabric = find("js/hybrid/HybridFabricCore.js")
 print(f"util: id={util_id} hash={util['hash'][:10]}…")
 print(f"core: id={core_id} hash={core['hash'][:10]}… ({core['path']})")
+print(f"fabric: id={fabric_id} hash={fabric['hash'][:10]}… ({fabric['path']})")
 
 # --- ring 1 ---
 registry_util = f"""'use strict';
@@ -101,6 +103,38 @@ typed_unit = (
 )
 (OUT / "registry-core-rn.ts").write_text(typed_unit)
 
+# --- ring 0, fabric flavor: typed persistent reconciler bound to
+# nativeFabricUIManager, keyed to the HybridFabricCore twin's hash ---
+fbody = (REAL / "fabric-core-typed-body.template.ts").read_text()
+fbody = fbody.replace("__FABRIC_HASH__", fabric["hash"])
+fbody = fbody.replace("__FABRIC_PATH__", fabric["path"])
+fbody = fbody.replace("__FABRIC_ID__", str(fabric_id))
+fcore = (REAL / "typed-port-core.ts").read_text()
+fcore = fcore.replace("const supportsMutation = true;", "const supportsMutation = false;")
+fcore = fcore.replace("const supportsPersistence = false;", "const supportsPersistence = true;")
+fdiff = "\n".join(
+    l for l in (REAL / "diffprops-typed-body.ts").read_text().splitlines()
+    if not l.startswith("dpRunWorkload(")
+)
+faliases = """
+function fhDiff(prevProps: any, nextProps: any, validAttributes: any): any {
+  return tDiffProperties(null, prevProps, nextProps, validAttributes);
+}
+function fhCreate(props: any, validAttributes: any): any {
+  return tAddNestedProperty(null, props, validAttributes);
+}
+"""
+fabric_unit = (
+    prelude
+    + fdiff
+    + faliases
+    + (REAL / "fabric-host.inc.js").read_text()
+    + fcore
+    + (REAL / "fabric-app.inc.js").read_text()
+    + fbody
+)
+(OUT / "registry-fabric-rn.ts").write_text(fabric_unit)
+
 
 def shermes(args, cfg):
     cflags = (
@@ -130,12 +164,16 @@ def shermes_ios(args):
 
 shermes(["-typed", "-O", "-c", "-exported-unit=core",
          str(OUT / "registry-core-rn.ts"), "-o", str(OUT / "core_unit_rn.o")], CFG_ANDROID)
+shermes(["-typed", "-O", "-c", "-exported-unit=fabriccore",
+         str(OUT / "registry-fabric-rn.ts"), "-o", str(OUT / "fabric_unit_rn.o")], CFG_ANDROID)
 shermes(["-O", "-c", "-exported-unit=util",
          str(OUT / "registry-util-rn.js"), "-o", str(OUT / "util_unit_rn.o")], CFG_ANDROID)
 
 if "--ios" in sys.argv:
     shermes_ios(["-typed", "-O", "-c", "-exported-unit=core",
                  str(OUT / "registry-core-rn.ts"), "-o", str(OUT / "core_unit_rn_ios.o")])
+    shermes_ios(["-typed", "-O", "-c", "-exported-unit=fabriccore",
+                 str(OUT / "registry-fabric-rn.ts"), "-o", str(OUT / "fabric_unit_rn_ios.o")])
     shermes_ios(["-O", "-c", "-exported-unit=util",
                  str(OUT / "registry-util-rn.js"), "-o", str(OUT / "util_unit_rn_ios.o")])
 

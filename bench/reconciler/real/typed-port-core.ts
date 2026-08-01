@@ -963,7 +963,7 @@ function completeWork(current: FiberNode | null, workInProgress: FiberNode): voi
       if (supportsMutation) {
         const oldProps: any = current.memoizedProps;
         if (oldProps !== newProps) {
-          const payload: any = diffHostProps(oldProps, newProps);
+          const payload: any = diffHostProps(oldProps, newProps, current.stateNode);
           workInProgress.updateQueue = payload;
           if (payload !== null) {
             workInProgress.flags |= Update;
@@ -977,7 +977,7 @@ function completeWork(current: FiberNode | null, workInProgress: FiberNode): voi
         if (childrenUnchanged && oldPropsP === newProps) {
           workInProgress.stateNode = currentInstance;
         } else {
-          const payloadP: any = oldPropsP !== newProps ? diffHostProps(oldPropsP, newProps) : null;
+          const payloadP: any = oldPropsP !== newProps ? diffHostProps(oldPropsP, newProps, currentInstance) : null;
           if (childrenUnchanged && payloadP === null) {
             workInProgress.stateNode = currentInstance;
           } else {
@@ -993,7 +993,7 @@ function completeWork(current: FiberNode | null, workInProgress: FiberNode): voi
         }
       }
     } else {
-      const instance: any = hcCreateInstance(workInProgress.type, newProps);
+      const instance: any = hcCreateInstance(workInProgress.type, newProps, workInProgress);
       appendAllChildren(instance, workInProgress);
       workInProgress.stateNode = instance;
     }
@@ -1009,14 +1009,14 @@ function completeWork(current: FiberNode | null, workInProgress: FiberNode): voi
         }
       } else {
         if (oldText !== newProps) {
-          workInProgress.stateNode = hcCreateTextInstance(newProps);
+          workInProgress.stateNode = hcCreateTextInstance(newProps, workInProgress);
           workInProgress.flags |= Update;
         } else {
           workInProgress.stateNode = current.stateNode;
         }
       }
     } else {
-      workInProgress.stateNode = hcCreateTextInstance(newProps);
+      workInProgress.stateNode = hcCreateTextInstance(newProps, workInProgress);
     }
     bubbleProperties(workInProgress);
     return;

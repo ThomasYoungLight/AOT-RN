@@ -515,6 +515,27 @@ Persistence costs everyone more than mutation mode (Fabric's real profile: clone
 
 Artifacts: `bench/reconciler/real/{main-real-persistent-body.js, build-real-persistent.sh, build-typed-persistent.sh, diffprops-shared.inc.js, diffprops-real-body.js, diffprops-typed-body.ts}`; persistent paths in `typed-port-core.ts`; orchestrator `bench/hybrid/orchestrate.py`.
 
+### Experiment 13 (2026-08-02): the typed reconciler drives a LIVE Fabric surface — `nativeFabricUIManager` bound
+
+The last gap between the harness and the real thing is closed: the typed persistent reconciler now renders **real native views** through Fabric's C++ UIManager binding, on both phones, with touch working — and OTA still swaps it for the interpreted real React on the same screen.
+
+**How it's wired.** A new glue module (`js/HybridFabricDemo.js`) registers a runnable that takes over RNTester's root surface (ReactFabric never runs): it resolves real view configs from `ReactNativeViewConfigRegistry` (RCTView/RCTText/RCTRawText), registers the touch handler via `nativeFabricUIManager.registerEventHandler`, and hands an env to the ring-0 core module `js/hybrid/HybridFabricCore.js`. That module's JS twin is the real react-reconciler in persistence mode; the binary registers the typed port under its content hash. Both drive the identical host layer (`fabric-host.inc.js`), which maps the port's seven persistent host ops onto the binding exactly as RN's shipped renderer does — `createNode(tag, viewName, rootTag, payload, fiber)` with the fiber as `instanceHandle`, `cloneNodeWithNewProps`/`WithNewChildren`/`WithNewChildrenAndProps` chosen by (keepChildren × payload), zero-arg `createChildSet`, `appendChildToSet`, and commit-phase `completeRoot(rootTag, childSet)`. Payloads come from the Exp-12 diffProperties ports (typed in the unit, verbatim RN algorithm in the twin) against the real ViewConfig `validAttributes` — so style flattening and `processColor` run for real. Touch events arrive from C++ with the creating fiber as target; a fiber-walk to the nearest `onPress` (stable via `useCallback`) completes the loop.
+
+**What happened on device.** The demo app (header + 30 memoized rows; each tick moves a highlight and rewrites the header text; taps toggle a selection) mounted through 63 `createNode` calls + 1 `completeRoot`, ticks live, and answers taps — screenshot-verified on the S23 (`adb input tap` on Row 3 → row turns blue, header shows "selected 3") in BOTH modes. Every commit is exactly: 1 text create, 5 clones, 33 appends, 1 child set + 1 `completeRoot` — **identical op streams from the typed port and the real reconciler**, the checksum-equivalence result now holding against the real C++ host.
+
+| Live Fabric commits (1000 measured, on device) | ms/commit | vs interp |
+|---|---|---|
+| S23 Ultra — interpreted real React (OTA mode) | 0.473 | 1.0× |
+| S23 Ultra — **typed unit** | **0.358–0.364** | **~1.31×** |
+| iPhone 15 Pro Max — interpreted real React (OTA mode) | 0.232 | 1.0× |
+| iPhone 15 Pro Max — **typed unit** | **0.147** | **1.58×** |
+
+The ratio is lower than the host-only 1.87× because each commit now includes Fabric's invariant C++ share (RawProps parsing, ShadowTree commit, Yoga) — the typed win applies to the JS slice only. That is the honest number for "reconciler AOT in production": **~24% (Android) to ~37% (iPhone) off every UI commit**, with the app code untouched and OTA intact — the round trip (typed → OTA-edit → interpreted real React on the same live screen → restore → typed again) was exercised on both phones, per-module: while `fabriccore` was shadowed, the other two units stayed native.
+
+**Pipeline lesson, again.** The stale-manifest trap bit a second time: running `build-rn-registry.py` by hand after the OTA bundle pass baked the OTA hash into the units, silently unbinding ring 0 after the restore. Re-running `orchestrate.py --ios` (which orders twin → bundle → registry → gate) fixed it — registry codegen should only ever run through the orchestrator.
+
+Artifacts: `bench/reconciler/real/{fabric-host.inc.js, fabric-app.inc.js, fabric-core-js-body.js, fabric-core-typed-body.template.ts, build-fabric-twin.sh}`; glue `packages/rn-tester/js/HybridFabricDemo.js`; third SHUnit (`fabriccore`) in `ReactInstance.cpp`/CMake/xcconfig; fabric unit assembly in `build-rn-registry.py`. Host-op signatures gained instance/fiber params (`diffHostProps(old, new, inst)`, `hcCreateInstance(type, props, fiber)`, `hcCreateTextInstance(text, fiber)`) — both equivalence gates re-verified after the change (4174768215 mutation, 2635835858 persistent).
+
 ### Rejected alternatives
 
 - **Dual engine / native core + JS islands** (Valdi-style): two heaps, serialization at every boundary, function-identity hazards.

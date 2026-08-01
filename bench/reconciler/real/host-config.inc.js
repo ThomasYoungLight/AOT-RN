@@ -40,7 +40,10 @@ function hashVal(v) {
   return 13; // functions/objects: identity not hashable, count as opaque
 }
 
-function diffHostProps(oldProps, newProps) {
+// `inst`/`fiber` params below exist for host-config interface parity with the
+// fabric host (which needs validAttributes and the instanceHandle); the
+// recording host ignores them.
+function diffHostProps(oldProps, newProps, inst) {
   var payload = anyNull();
   for (var k in oldProps) {
     if (k === 'children') continue;
@@ -59,7 +62,7 @@ function diffHostProps(oldProps, newProps) {
   return payload;
 }
 
-function hcCreateInstance(type, props) {
+function hcCreateInstance(type, props, fiber) {
   hostStats.creates++;
   var inst = {id: nextInstanceId++, type: type, props: props, children: mkList()};
   mix(1);
@@ -67,7 +70,7 @@ function hcCreateInstance(type, props) {
   return inst;
 }
 
-function hcCreateTextInstance(txt) {
+function hcCreateTextInstance(txt, fiber) {
   hostStats.textCreates++;
   var inst = {id: nextInstanceId++, type: '#text', text: txt, children: null};
   mix(2);
