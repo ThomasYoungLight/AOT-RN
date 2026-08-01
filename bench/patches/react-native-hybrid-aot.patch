@@ -1,7 +1,7 @@
 From 4709e32b34d229e0805d679b6fb916bf4161af96 Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 00:28:57 +0800
-Subject: [PATCH 1/6] Hybrid AOT prototype: SHUnit ring dispatch in RN
+Subject: [PATCH 1/7] Hybrid AOT prototype: SHUnit ring dispatch in RN
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -6784,7 +6784,7 @@ index 9546a3b..1a95bf5 100644
 From 90c186ac1d579ad45326e2a4e9e7a78ce3da1ce7 Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 01:35:19 +0800
-Subject: [PATCH 2/6] Live Fabric surface driven by the hybrid ring-0
+Subject: [PATCH 2/7] Live Fabric surface driven by the hybrid ring-0
  reconciler
 
 HybridFabricDemo takes over the RNTester root surface and binds the ring-0
@@ -13098,7 +13098,7 @@ index 3b5031b..ddd11e6 100644
 From cca4e6fc09f7531dc6462fe92024c2f52c4f38cf Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 02:05:18 +0800
-Subject: [PATCH 3/6] Hash-per-__d-call dispatch + policy-selected ring-1 unit
+Subject: [PATCH 3/7] Hash-per-__d-call dispatch + policy-selected ring-1 unit
 
 The serializer appends each module's content hash to its own __d call (no
 central __moduleHashes table) so modules stay self-describing under
@@ -13301,7 +13301,7 @@ index f850b93..fbd66a8 100644
 From a82cde03e0551bd538e1e215fd1b43322c1d0f08 Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 02:48:45 +0800
-Subject: [PATCH 4/6] Rebuilt ring-0 twins with the feature-extended reconciler
+Subject: [PATCH 4/7] Rebuilt ring-0 twins with the feature-extended reconciler
  workload
 
 
@@ -13624,7 +13624,7 @@ index ddd11e6..0d155ae 100644
 From 647462dd17f2117a3841da521aa0e121cf2f947f Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 03:05:20 +0800
-Subject: [PATCH 5/6] Fabric takeover demo: handle system bars (edge-to-edge
+Subject: [PATCH 5/7] Fabric takeover demo: handle system bars (edge-to-edge
  insets)
 
 The takeover surface bypasses AppContainer/safe-area plumbing, so the glue
@@ -13714,7 +13714,7 @@ index 0fc3fac..5fb4d49 100644
 From a676bee2bf0b6924b1665a4ed1eaa7848e344676 Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 03:32:46 +0800
-Subject: [PATCH 6/6] Ring-1 cost instrumentation: eval timing +
+Subject: [PATCH 6/7] Ring-1 cost instrumentation: eval timing +
  factory-execution recorder
 
 evaluateSHUnit wrapped in chrono, exposed as global.__hybridEvalMs (glog is
@@ -13879,6 +13879,1135 @@ index fbd66a8..3573e73 100644
    hlog(
      '[HybridAOT] util.tag()=' +
        util.tag() +
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 808ddfc7032094a207bbe93028762222c2b24d6f Mon Sep 17 00:00:00 2001
+From: Thomas <thomas.wang@ponyft.com>
+Date: Sun, 2 Aug 2026 04:10:04 +0800
+Subject: [PATCH 7/7] HybridShop: real-app trial for the hybrid AOT pipeline
+
+Ordinary RN app (normal ReactFabric rendering): FlatList catalog over a fake
+async API, hand-rolled stack navigation with LAZILY require()d screens,
+theme context, memoized components, images; deterministic auto-pilot logs
+TTI / lazy-screen first-open / refresh-burst timings. Dispatch prelude
+stamps __hybridT0 (TTI anchor). Fabric takeover demo parked behind its flag
+(core must stay referenced from live exports: Metro DCE drops requires whose
+binding is only used in dead code).
+
+
+---
+ packages/rn-tester/hybrid-serializer.js       |   1 +
+ packages/rn-tester/js/HybridFabricDemo.js     |  24 ++-
+ packages/rn-tester/js/RNTesterApp.android.js  |   2 +
+ packages/rn-tester/js/RNTesterApp.ios.js      |   2 +
+ .../rn-tester/js/hybridshop/HybridShopApp.js  | 178 ++++++++++++++++++
+ .../js/hybridshop/components/Header.js        |  45 +++++
+ .../js/hybridshop/components/PrimaryButton.js |  38 ++++
+ .../js/hybridshop/components/ProductCard.js   |  77 ++++++++
+ .../js/hybridshop/components/RatingStars.js   |  35 ++++
+ packages/rn-tester/js/hybridshop/data/api.js  |  67 +++++++
+ .../rn-tester/js/hybridshop/data/useCart.js   |  46 +++++
+ packages/rn-tester/js/hybridshop/perf.js      |  35 ++++
+ .../js/hybridshop/screens/CartScreen.js       |  93 +++++++++
+ .../js/hybridshop/screens/DetailScreen.js     |  84 +++++++++
+ .../js/hybridshop/screens/FeedScreen.js       | 116 ++++++++++++
+ .../js/hybridshop/screens/SettingsScreen.js   |  67 +++++++
+ packages/rn-tester/js/hybridshop/theme.js     |  41 ++++
+ 17 files changed, 943 insertions(+), 8 deletions(-)
+ create mode 100644 packages/rn-tester/js/hybridshop/HybridShopApp.js
+ create mode 100644 packages/rn-tester/js/hybridshop/components/Header.js
+ create mode 100644 packages/rn-tester/js/hybridshop/components/PrimaryButton.js
+ create mode 100644 packages/rn-tester/js/hybridshop/components/ProductCard.js
+ create mode 100644 packages/rn-tester/js/hybridshop/components/RatingStars.js
+ create mode 100644 packages/rn-tester/js/hybridshop/data/api.js
+ create mode 100644 packages/rn-tester/js/hybridshop/data/useCart.js
+ create mode 100644 packages/rn-tester/js/hybridshop/perf.js
+ create mode 100644 packages/rn-tester/js/hybridshop/screens/CartScreen.js
+ create mode 100644 packages/rn-tester/js/hybridshop/screens/DetailScreen.js
+ create mode 100644 packages/rn-tester/js/hybridshop/screens/FeedScreen.js
+ create mode 100644 packages/rn-tester/js/hybridshop/screens/SettingsScreen.js
+ create mode 100644 packages/rn-tester/js/hybridshop/theme.js
+
+diff --git a/packages/rn-tester/hybrid-serializer.js b/packages/rn-tester/hybrid-serializer.js
+index decf4b6..cf88347 100644
+--- a/packages/rn-tester/hybrid-serializer.js
++++ b/packages/rn-tester/hybrid-serializer.js
+@@ -81,6 +81,7 @@ function buildDispatchPrelude() {
+   return (
+     '(function (g) {\n' +
+     "  'use strict';\n" +
++    '  g.__hybridT0 = Date.now();\n' +
+     '  var orig = g.__d;\n' +
+     '  if (typeof orig !== "function") { return; }\n' +
+     '  var bindings = {};\n' +
+diff --git a/packages/rn-tester/js/HybridFabricDemo.js b/packages/rn-tester/js/HybridFabricDemo.js
+index d702c0e..f22379e 100644
+--- a/packages/rn-tester/js/HybridFabricDemo.js
++++ b/packages/rn-tester/js/HybridFabricDemo.js
+@@ -11,15 +11,21 @@
+ 
+ 'use strict';
+ 
+-const TAKE_OVER = true;
++// Off while the HybridShop real-app trial owns the root surface
++// (js/hybridshop/HybridShopApp.js); flip back to re-enable the direct
++// nativeFabricUIManager takeover demo.
++const TAKE_OVER = false;
++
++// Top-level (not inside the flag): Metro constant-folds `if (false)` and
++// would otherwise drop HybridFabricCore from the bundle graph entirely,
++// unkeying the fabriccore ring-0 unit.
++const {AppRegistry, Platform, StatusBar} = require('react-native');
++require('react-native/Libraries/Components/View/ViewNativeComponent');
++require('react-native/Libraries/Text/TextNativeComponent');
++const ReactNativeViewConfigRegistry = require('react-native/Libraries/Renderer/shims/ReactNativeViewConfigRegistry');
++const core = require('./hybrid/HybridFabricCore');
+ 
+ if (TAKE_OVER) {
+-  const {AppRegistry, Platform, StatusBar} = require('react-native');
+-  // Ensure the real view configs are registered before we resolve them.
+-  require('react-native/Libraries/Components/View/ViewNativeComponent');
+-  require('react-native/Libraries/Text/TextNativeComponent');
+-  const ReactNativeViewConfigRegistry = require('react-native/Libraries/Renderer/shims/ReactNativeViewConfigRegistry');
+-  const core = require('./hybrid/HybridFabricCore');
+ 
+   const g: $FlowFixMe = global;
+   const hlog = (m: string) => {
+@@ -92,4 +98,6 @@ if (TAKE_OVER) {
+   AppRegistry.registerRunnable('RNTesterApp', run);
+ }
+ 
+-module.exports = {};
++// Export the core reference so Metro's dead-code elimination cannot drop the
++// HybridFabricCore dependency while TAKE_OVER is false.
++module.exports = {core};
+diff --git a/packages/rn-tester/js/RNTesterApp.android.js b/packages/rn-tester/js/RNTesterApp.android.js
+index 92f75ad..cc03bba 100644
+--- a/packages/rn-tester/js/RNTesterApp.android.js
++++ b/packages/rn-tester/js/RNTesterApp.android.js
+@@ -17,5 +17,7 @@ AppRegistry.registerComponent('RNTesterApp', () => RNTesterApp);
+ // Must run AFTER registerComponent (its registerRunnable overrides the same
+ // app key), hence require() rather than a hoisted import.
+ require('./HybridFabricDemo');
++// HybridShop real-app trial: registers over 'RNTesterApp' when its flag is on.
++require('./hybridshop/HybridShopApp');
+ 
+ module.exports = RNTesterApp;
+diff --git a/packages/rn-tester/js/RNTesterApp.ios.js b/packages/rn-tester/js/RNTesterApp.ios.js
+index ac5e1dc..5ab8eaf 100644
+--- a/packages/rn-tester/js/RNTesterApp.ios.js
++++ b/packages/rn-tester/js/RNTesterApp.ios.js
+@@ -30,6 +30,8 @@ AppRegistry.registerComponent('RNTesterApp', () => RNTesterApp);
+ // Must run AFTER registerComponent (its registerRunnable overrides the same
+ // app key), hence require() rather than a hoisted import.
+ require('./HybridFabricDemo');
++// HybridShop real-app trial: registers over 'RNTesterApp' when its flag is on.
++require('./hybridshop/HybridShopApp');
+ 
+ // Register suitable examples for snapshot tests
+ RNTesterList.Components.concat(RNTesterList.APIs).forEach(
+diff --git a/packages/rn-tester/js/hybridshop/HybridShopApp.js b/packages/rn-tester/js/hybridshop/HybridShopApp.js
+new file mode 100644
+index 0000000..e92aec1
+--- /dev/null
++++ b/packages/rn-tester/js/hybridshop/HybridShopApp.js
+@@ -0,0 +1,178 @@
++/**
++ * HybridShop — the real-app trial for the hybrid AOT pipeline. An ordinary
++ * React Native app (normal ReactFabric rendering, NO surface takeover):
++ * FlatList feed over a fake async API, hand-rolled stack navigation whose
++ * non-initial screens are require()d LAZILY on first open, theme context,
++ * memoized components, images.
++ *
++ * An auto-pilot drives a deterministic session and logs timings:
++ * TTI (bundle start -> feed rendered with data), first-open time per lazy
++ * screen (require + mount + layout), theme-toggle commit, refresh bursts.
++ *
++ * @format
++ * @noflow
++ */
++
++'use strict';
++
++const React = require('react');
++const {AppRegistry, Platform, SafeAreaView, StatusBar, View, StyleSheet} =
++  require('react-native');
++const {ThemeContext, palettes} = require('./theme');
++const {useCart} = require('./data/useCart');
++const FeedScreen = require('./screens/FeedScreen');
++const perf = require('./perf');
++
++const HYBRID_SHOP = true;
++
++// Lazy screen table: factories run on FIRST navigation, not at startup —
++// under profile-guided ring 1 these stay ring 2 unless a profile run
++// visited them.
++const lazyScreens = {
++  detail: () => require('./screens/DetailScreen'),
++  cart: () => require('./screens/CartScreen'),
++  settings: () => require('./screens/SettingsScreen'),
++};
++const loadedScreens = {};
++
++function loadScreen(name) {
++  if (loadedScreens[name] == null) {
++    loadedScreens[name] = lazyScreens[name]();
++  }
++  return loadedScreens[name];
++}
++
++function ScreenMount({name, t0, children}) {
++  React.useLayoutEffect(() => {
++    if (t0 != null) {
++      perf.hlog('[HybridShop] nav(' + name + '): ' + (Date.now() - t0) + ' ms (require+mount)');
++    }
++    // eslint-disable-next-line react-hooks/exhaustive-deps
++  }, []);
++  return children;
++}
++
++const DEMO_PRODUCT = {
++  id: 7,
++  name: 'Nova Runner',
++  price: 129.5,
++  rating: 4.4,
++  reviews: 812,
++  stock: 12,
++  blurb: 'Autopilot demo product.',
++  tag: 'new',
++};
++
++function makeAutopilot(api) {
++  let refreshFn = null;
++  let started = false;
++  const pilot = {
++    registerRefresh(fn) {
++      refreshFn = fn;
++    },
++    onFeedReady() {
++      if (started) {
++        return;
++      }
++      started = true;
++      const step = (delay, fn) => new Promise(res => setTimeout(() => res(fn()), delay));
++      step(500, () => api.navigate('detail', {product: DEMO_PRODUCT}))
++        .then(() => step(500, api.goBack))
++        .then(() => step(400, () => api.navigate('cart')))
++        .then(() => step(500, api.goBack))
++        .then(() => step(400, () => api.navigate('settings')))
++        .then(() => step(500, () => {
++          const t0 = Date.now();
++          api.toggleTheme();
++          setTimeout(
++            () => perf.hlog('[HybridShop] themeToggle scheduled+committed ≤ ' + (Date.now() - t0) + ' ms'),
++            0,
++          );
++        }))
++        .then(() => step(500, api.goBack))
++        .then(async () => {
++          const times = [];
++          for (let i = 0; i < 3; i++) {
++            if (refreshFn != null) {
++              times.push(await refreshFn());
++            }
++          }
++          perf.hlog('[HybridShop] refreshBurst (fetch+prepend 20, x3): ' + times.join('/') + ' ms');
++          perf.hlog('[HybridShop] autopilot done');
++        });
++    },
++  };
++  return pilot;
++}
++
++function HybridShopRoot() {
++  const [themeName, setThemeName] = React.useState('light');
++  const [stack, setStack] = React.useState([{name: 'feed', params: null, t0: null}]);
++  const cart = useCart();
++
++  const theme = React.useMemo(
++    () => ({
++      name: themeName,
++      colors: palettes[themeName],
++      toggle: () => setThemeName(t => (t === 'light' ? 'dark' : 'light')),
++    }),
++    [themeName],
++  );
++
++  const navigate = React.useCallback((name, params) => {
++    const t0 = Date.now();
++    loadScreen(name);
++    setStack(s => s.concat([{name, params: params == null ? null : params, t0}]));
++  }, []);
++  const goBack = React.useCallback(() => {
++    setStack(s => (s.length > 1 ? s.slice(0, -1) : s));
++  }, []);
++
++  const autopilot = React.useMemo(
++    () =>
++      makeAutopilot({
++        navigate,
++        goBack,
++        toggleTheme: () => setThemeName(t => (t === 'light' ? 'dark' : 'light')),
++      }),
++    [navigate, goBack],
++  );
++
++  const top = stack[stack.length - 1];
++  let screen;
++  if (top.name === 'feed') {
++    screen = <FeedScreen navigate={navigate} cart={cart} autopilot={autopilot} />;
++  } else {
++    const Comp = loadScreen(top.name);
++    screen = (
++      <ScreenMount name={top.name} t0={top.t0} key={top.name + stack.length}>
++        <Comp goBack={goBack} params={top.params} cart={cart} navigate={navigate} />
++      </ScreenMount>
++    );
++  }
++
++  return (
++    <ThemeContext.Provider value={theme}>
++      <SafeAreaView style={[styles.root, {backgroundColor: theme.colors.bg}]}>
++        <StatusBar
++          barStyle={themeName === 'dark' ? 'light-content' : 'dark-content'}
++        />
++        <View style={styles.statusPad} />
++        {screen}
++      </SafeAreaView>
++    </ThemeContext.Provider>
++  );
++}
++
++const styles = StyleSheet.create({
++  root: {flex: 1},
++  statusPad: {
++    height: Platform.OS === 'android' ? StatusBar.currentHeight ?? 24 : 0,
++  },
++});
++
++if (HYBRID_SHOP) {
++  AppRegistry.registerComponent('RNTesterApp', () => HybridShopRoot);
++}
++
++module.exports = HybridShopRoot;
+diff --git a/packages/rn-tester/js/hybridshop/components/Header.js b/packages/rn-tester/js/hybridshop/components/Header.js
+new file mode 100644
+index 0000000..ecb3c1d
+--- /dev/null
++++ b/packages/rn-tester/js/hybridshop/components/Header.js
+@@ -0,0 +1,45 @@
++/**
++ * @format
++ * @noflow
++ */
++
++'use strict';
++
++const React = require('react');
++const {Pressable, Text, View, StyleSheet} = require('react-native');
++const {useTheme} = require('../theme');
++
++function Header({title, onBack, right}) {
++  const {colors} = useTheme();
++  return (
++    <View style={[styles.bar, {backgroundColor: colors.card, borderBottomColor: colors.divider}]}>
++      {onBack != null ? (
++        <Pressable onPress={onBack} style={styles.back} testID="header-back">
++          <Text style={[styles.backText, {color: colors.accent}]}>‹ Back</Text>
++        </Pressable>
++      ) : (
++        <View style={styles.back} />
++      )}
++      <Text style={[styles.title, {color: colors.text}]} numberOfLines={1}>
++        {title}
++      </Text>
++      <View style={styles.right}>{right}</View>
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  bar: {
++    height: 52,
++    flexDirection: 'row',
++    alignItems: 'center',
++    paddingHorizontal: 12,
++    borderBottomWidth: StyleSheet.hairlineWidth,
++  },
++  back: {width: 70},
++  backText: {fontSize: 15, fontWeight: '600'},
++  title: {flex: 1, fontSize: 17, fontWeight: '700', textAlign: 'center'},
++  right: {width: 70, alignItems: 'flex-end'},
++});
++
++module.exports = React.memo(Header);
+diff --git a/packages/rn-tester/js/hybridshop/components/PrimaryButton.js b/packages/rn-tester/js/hybridshop/components/PrimaryButton.js
+new file mode 100644
+index 0000000..bf52d35
+--- /dev/null
++++ b/packages/rn-tester/js/hybridshop/components/PrimaryButton.js
+@@ -0,0 +1,38 @@
++/**
++ * @format
++ * @noflow
++ */
++
++'use strict';
++
++const React = require('react');
++const {Pressable, Text, StyleSheet} = require('react-native');
++const {useTheme} = require('../theme');
++
++function PrimaryButton({label, onPress, compact}) {
++  const {colors} = useTheme();
++  return (
++    <Pressable
++      onPress={onPress}
++      style={({pressed}) => [
++        styles.base,
++        compact ? styles.compact : null,
++        {backgroundColor: colors.accent, opacity: pressed ? 0.7 : 1},
++      ]}>
++      <Text style={[styles.label, {color: colors.accentText}]}>{label}</Text>
++    </Pressable>
++  );
++}
++
++const styles = StyleSheet.create({
++  base: {
++    paddingVertical: 10,
++    paddingHorizontal: 16,
++    borderRadius: 10,
++    alignItems: 'center',
++  },
++  compact: {paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8},
++  label: {fontSize: 14, fontWeight: '600'},
++});
++
++module.exports = React.memo(PrimaryButton);
+diff --git a/packages/rn-tester/js/hybridshop/components/ProductCard.js b/packages/rn-tester/js/hybridshop/components/ProductCard.js
+new file mode 100644
+index 0000000..325e601
+--- /dev/null
++++ b/packages/rn-tester/js/hybridshop/components/ProductCard.js
+@@ -0,0 +1,77 @@
++/**
++ * @format
++ * @noflow
++ */
++
++'use strict';
++
++const React = require('react');
++const {Image, Pressable, Text, View, StyleSheet} = require('react-native');
++const RatingStars = require('./RatingStars');
++const PrimaryButton = require('./PrimaryButton');
++const {useTheme} = require('../theme');
++
++const thumbs = [
++  require('../../assets/alpha-hotdog.png'),
++  require('../../assets/bandaged.png'),
++  require('../../assets/hawk.png'),
++  require('../../assets/bunny.png'),
++];
++
++function ProductCard({product, onOpen, onAdd}) {
++  const {colors} = useTheme();
++  const open = React.useCallback(() => onOpen(product), [onOpen, product]);
++  const add = React.useCallback(() => onAdd(product), [onAdd, product]);
++  return (
++    <Pressable onPress={open} style={[styles.card, {backgroundColor: colors.card}]}>
++      <Image source={thumbs[product.id % thumbs.length]} style={styles.thumb} />
++      <View style={styles.body}>
++        <View style={styles.titleRow}>
++          <Text style={[styles.name, {color: colors.text}]} numberOfLines={1}>
++            {product.name}
++          </Text>
++          {product.tag != null ? (
++            <Text style={[styles.tag, {backgroundColor: colors.accent, color: colors.accentText}]}>
++              {product.tag}
++            </Text>
++          ) : null}
++        </View>
++        <RatingStars rating={product.rating} reviews={product.reviews} />
++        <View style={styles.priceRow}>
++          <Text style={[styles.price, {color: colors.text}]}>
++            ${product.price.toFixed(2)}
++          </Text>
++          <PrimaryButton label="Add" onPress={add} compact />
++        </View>
++      </View>
++    </Pressable>
++  );
++}
++
++const styles = StyleSheet.create({
++  card: {
++    flexDirection: 'row',
++    marginHorizontal: 12,
++    marginVertical: 5,
++    borderRadius: 12,
++    padding: 10,
++  },
++  thumb: {width: 56, height: 56, borderRadius: 8},
++  body: {flex: 1, marginLeft: 10, justifyContent: 'space-between'},
++  titleRow: {flexDirection: 'row', alignItems: 'center'},
++  name: {flex: 1, fontSize: 15, fontWeight: '600'},
++  tag: {
++    fontSize: 10,
++    fontWeight: '700',
++    paddingHorizontal: 6,
++    paddingVertical: 2,
++    borderRadius: 6,
++    overflow: 'hidden',
++    marginLeft: 6,
++    textTransform: 'uppercase',
++  },
++  priceRow: {flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between'},
++  price: {fontSize: 15, fontWeight: '700'},
++});
++
++module.exports = React.memo(ProductCard);
+diff --git a/packages/rn-tester/js/hybridshop/components/RatingStars.js b/packages/rn-tester/js/hybridshop/components/RatingStars.js
+new file mode 100644
+index 0000000..fb3c6c9
+--- /dev/null
++++ b/packages/rn-tester/js/hybridshop/components/RatingStars.js
+@@ -0,0 +1,35 @@
++/**
++ * @format
++ * @noflow
++ */
++
++'use strict';
++
++const React = require('react');
++const {Text, View, StyleSheet} = require('react-native');
++const {useTheme} = require('../theme');
++
++function RatingStars({rating, reviews}) {
++  const {colors} = useTheme();
++  const full = Math.round(rating);
++  let stars = '';
++  for (let i = 0; i < 5; i++) {
++    stars += i < full ? '★' : '☆';
++  }
++  return (
++    <View style={styles.row}>
++      <Text style={[styles.stars, {color: colors.accent}]}>{stars}</Text>
++      <Text style={[styles.count, {color: colors.subtext}]}>
++        {rating.toFixed(1)} ({reviews})
++      </Text>
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  row: {flexDirection: 'row', alignItems: 'center'},
++  stars: {fontSize: 13, marginRight: 6},
++  count: {fontSize: 12},
++});
++
++module.exports = React.memo(RatingStars);
+diff --git a/packages/rn-tester/js/hybridshop/data/api.js b/packages/rn-tester/js/hybridshop/data/api.js
+new file mode 100644
+index 0000000..02f874f
+--- /dev/null
++++ b/packages/rn-tester/js/hybridshop/data/api.js
+@@ -0,0 +1,67 @@
++/**
++ * Fake product API: deterministic (seeded) catalog behind a constant
++ * simulated latency so TTI comparisons are apples-to-apples.
++ *
++ * @format
++ * @noflow
++ */
++
++'use strict';
++
++const LATENCY_MS = 80;
++
++const ADJECTIVES = ['Aero', 'Terra', 'Nova', 'Flux', 'Ember', 'Polar', 'Zen', 'Vivid'];
++const NOUNS = ['Runner', 'Kettle', 'Lamp', 'Pack', 'Chair', 'Board', 'Flask', 'Speaker'];
++const BLURBS = [
++  'Built from recycled aluminium with a soft-touch finish.',
++  'Weighs almost nothing, survives almost anything.',
++  'A quiet upgrade to a loud world.',
++  'Designed in collaboration with people who actually use it.',
++];
++
++let seed = 20260802;
++function rand(n) {
++  seed = (seed * 1103515245 + 12345) & 0x7fffffff;
++  return seed % n;
++}
++
++function makeProduct(id) {
++  const name = ADJECTIVES[rand(ADJECTIVES.length)] + ' ' + NOUNS[rand(NOUNS.length)];
++  return {
++    id,
++    name,
++    price: 900 + rand(24000) / 100,
++    rating: 2 + rand(31) / 10,
++    reviews: 3 + rand(1200),
++    stock: rand(40),
++    blurb: BLURBS[rand(BLURBS.length)],
++    tag: rand(3) === 0 ? 'sale' : rand(4) === 0 ? 'new' : null,
++  };
++}
++
++function fetchProducts(count) {
++  return new Promise(resolve => {
++    setTimeout(() => {
++      const items = [];
++      for (let i = 0; i < count; i++) {
++        items.push(makeProduct(i + 1));
++      }
++      resolve(items);
++    }, LATENCY_MS);
++  });
++}
++
++let nextRefreshId = 10000;
++function fetchFreshBatch(count) {
++  return new Promise(resolve => {
++    setTimeout(() => {
++      const items = [];
++      for (let i = 0; i < count; i++) {
++        items.push(makeProduct(nextRefreshId++));
++      }
++      resolve(items);
++    }, LATENCY_MS);
++  });
++}
++
++module.exports = {fetchProducts, fetchFreshBatch, LATENCY_MS};
+diff --git a/packages/rn-tester/js/hybridshop/data/useCart.js b/packages/rn-tester/js/hybridshop/data/useCart.js
+new file mode 100644
+index 0000000..dab2a8d
+--- /dev/null
++++ b/packages/rn-tester/js/hybridshop/data/useCart.js
+@@ -0,0 +1,46 @@
++/**
++ * @format
++ * @noflow
++ */
++
++'use strict';
++
++const React = require('react');
++
++function cartReducer(state, action) {
++  switch (action.type) {
++    case 'add': {
++      const existing = state.items.find(i => i.product.id === action.product.id);
++      let items;
++      if (existing) {
++        items = state.items.map(i =>
++          i.product.id === action.product.id ? {product: i.product, qty: i.qty + 1} : i,
++        );
++      } else {
++        items = state.items.concat([{product: action.product, qty: 1}]);
++      }
++      return {items, adds: state.adds + 1};
++    }
++    case 'remove': {
++      return {
++        items: state.items.filter(i => i.product.id !== action.productId),
++        adds: state.adds,
++      };
++    }
++    case 'clear':
++      return {items: [], adds: state.adds};
++    default:
++      return state;
++  }
++}
++
++function useCart() {
++  const [state, dispatch] = React.useReducer(cartReducer, {items: [], adds: 0});
++  const total = React.useMemo(
++    () => state.items.reduce((sum, i) => sum + i.product.price * i.qty, 0),
++    [state.items],
++  );
++  return {state, dispatch, total};
++}
++
++module.exports = {useCart};
+diff --git a/packages/rn-tester/js/hybridshop/perf.js b/packages/rn-tester/js/hybridshop/perf.js
+new file mode 100644
+index 0000000..c0c2e0d
+--- /dev/null
++++ b/packages/rn-tester/js/hybridshop/perf.js
+@@ -0,0 +1,35 @@
++/**
++ * Timing marks for the HybridShop trial. TTI anchors on global.__hybridT0
++ * (stamped by the dispatch prelude at bundle-evaluation start).
++ *
++ * @format
++ * @noflow
++ */
++
++'use strict';
++
++const g = global;
++
++const marks = {};
++
++function hlog(m) {
++  console.log(m);
++  if (g.__hybridLog != null) {
++    g.__hybridLog(m);
++  }
++}
++
++function mark(name) {
++  if (marks[name] == null) {
++    marks[name] = Date.now();
++  }
++}
++
++function measureFromT0(name) {
++  if (g.__hybridT0 != null && marks[name] == null) {
++    marks[name] = Date.now();
++    hlog('[HybridShop] ' + name + ': ' + (marks[name] - g.__hybridT0) + ' ms from bundle start');
++  }
++}
++
++module.exports = {hlog, mark, marks, measureFromT0};
+diff --git a/packages/rn-tester/js/hybridshop/screens/CartScreen.js b/packages/rn-tester/js/hybridshop/screens/CartScreen.js
+new file mode 100644
+index 0000000..7c14eda
+--- /dev/null
++++ b/packages/rn-tester/js/hybridshop/screens/CartScreen.js
+@@ -0,0 +1,93 @@
++/**
++ * Lazily required (see DetailScreen).
++ *
++ * @format
++ * @noflow
++ */
++
++'use strict';
++
++const React = require('react');
++const {FlatList, Text, View, StyleSheet} = require('react-native');
++const Header = require('../components/Header');
++const PrimaryButton = require('../components/PrimaryButton');
++const {useTheme} = require('../theme');
++
++function CartRow({item, onRemove}) {
++  const {colors} = useTheme();
++  return (
++    <View style={[styles.row, {backgroundColor: colors.card}]}>
++      <View style={styles.rowBody}>
++        <Text style={[styles.rowName, {color: colors.text}]} numberOfLines={1}>
++          {item.product.name}
++        </Text>
++        <Text style={[styles.rowMeta, {color: colors.subtext}]}>
++          {item.qty} × ${item.product.price.toFixed(2)}
++        </Text>
++      </View>
++      <PrimaryButton label="Remove" onPress={() => onRemove(item.product.id)} compact />
++    </View>
++  );
++}
++
++function CartScreen({goBack, cart}) {
++  const {colors} = useTheme();
++  const remove = React.useCallback(
++    productId => cart.dispatch({type: 'remove', productId}),
++    [cart],
++  );
++  const renderItem = React.useCallback(
++    ({item}) => <CartRow item={item} onRemove={remove} />,
++    [remove],
++  );
++  return (
++    <View style={[styles.root, {backgroundColor: colors.bg}]}>
++      <Header title="Your cart" onBack={goBack} />
++      {cart.state.items.length === 0 ? (
++        <View style={styles.empty}>
++          <Text style={[styles.emptyText, {color: colors.subtext}]}>Cart is empty.</Text>
++        </View>
++      ) : (
++        <FlatList
++          data={cart.state.items}
++          renderItem={renderItem}
++          keyExtractor={item => String(item.product.id)}
++          contentContainerStyle={styles.list}
++        />
++      )}
++      <View style={[styles.footer, {backgroundColor: colors.card, borderTopColor: colors.divider}]}>
++        <Text style={[styles.total, {color: colors.text}]}>
++          Total ${cart.total.toFixed(2)}
++        </Text>
++        <PrimaryButton label="Checkout" onPress={() => cart.dispatch({type: 'clear'})} />
++      </View>
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  root: {flex: 1},
++  empty: {flex: 1, alignItems: 'center', justifyContent: 'center'},
++  emptyText: {fontSize: 15},
++  list: {padding: 10},
++  row: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    borderRadius: 12,
++    padding: 12,
++    marginBottom: 8,
++  },
++  rowBody: {flex: 1, marginRight: 10},
++  rowName: {fontSize: 15, fontWeight: '600'},
++  rowMeta: {fontSize: 13, marginTop: 2},
++  footer: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'space-between',
++    padding: 14,
++    borderTopWidth: StyleSheet.hairlineWidth,
++  },
++  total: {fontSize: 17, fontWeight: '800'},
++});
++
++module.exports = CartScreen;
+diff --git a/packages/rn-tester/js/hybridshop/screens/DetailScreen.js b/packages/rn-tester/js/hybridshop/screens/DetailScreen.js
+new file mode 100644
+index 0000000..00c67d5
+--- /dev/null
++++ b/packages/rn-tester/js/hybridshop/screens/DetailScreen.js
+@@ -0,0 +1,84 @@
++/**
++ * Lazily required: this module (and its subtree) is NOT executed at startup —
++ * the navigation handler require()s it on first open. Under profile-guided
++ * ring 1 it stays ring 2 (interpreted) unless a profile run visited it.
++ *
++ * @format
++ * @noflow
++ */
++
++'use strict';
++
++const React = require('react');
++const {Image, ScrollView, Text, View, StyleSheet} = require('react-native');
++const Header = require('../components/Header');
++const RatingStars = require('../components/RatingStars');
++const PrimaryButton = require('../components/PrimaryButton');
++const {useTheme} = require('../theme');
++
++const thumbs = [
++  require('../../assets/alpha-hotdog.png'),
++  require('../../assets/bandaged.png'),
++  require('../../assets/hawk.png'),
++  require('../../assets/bunny.png'),
++];
++
++function Spec({label, value}) {
++  const {colors} = useTheme();
++  return (
++    <View style={[styles.specRow, {borderBottomColor: colors.divider}]}>
++      <Text style={[styles.specLabel, {color: colors.subtext}]}>{label}</Text>
++      <Text style={[styles.specValue, {color: colors.text}]}>{value}</Text>
++    </View>
++  );
++}
++
++function DetailScreen({goBack, params, cart}) {
++  const {colors} = useTheme();
++  const product = params.product;
++  const add = React.useCallback(
++    () => cart.dispatch({type: 'add', product}),
++    [cart, product],
++  );
++  return (
++    <View style={[styles.root, {backgroundColor: colors.bg}]}>
++      <Header title={product.name} onBack={goBack} />
++      <ScrollView contentContainerStyle={styles.content}>
++        <Image source={thumbs[product.id % thumbs.length]} style={styles.hero} />
++        <View style={[styles.card, {backgroundColor: colors.card}]}>
++          <Text style={[styles.price, {color: colors.text}]}>
++            ${product.price.toFixed(2)}
++          </Text>
++          <RatingStars rating={product.rating} reviews={product.reviews} />
++          <Text style={[styles.blurb, {color: colors.subtext}]}>{product.blurb}</Text>
++          <Spec label="In stock" value={String(product.stock)} />
++          <Spec label="SKU" value={'HS-' + product.id} />
++          <Spec label="Ships" value="2–4 days" />
++          <View style={styles.buttonWrap}>
++            <PrimaryButton label="Add to cart" onPress={add} />
++          </View>
++        </View>
++      </ScrollView>
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  root: {flex: 1},
++  content: {padding: 14},
++  hero: {width: 128, height: 128, borderRadius: 16, alignSelf: 'center', margin: 14},
++  card: {borderRadius: 14, padding: 16},
++  price: {fontSize: 24, fontWeight: '800', marginBottom: 6},
++  blurb: {fontSize: 14, lineHeight: 20, marginVertical: 10},
++  specRow: {
++    flexDirection: 'row',
++    justifyContent: 'space-between',
++    paddingVertical: 8,
++    borderBottomWidth: StyleSheet.hairlineWidth,
++  },
++  specLabel: {fontSize: 13},
++  specValue: {fontSize: 13, fontWeight: '600'},
++  buttonWrap: {marginTop: 14},
++});
++
++module.exports = DetailScreen;
+diff --git a/packages/rn-tester/js/hybridshop/screens/FeedScreen.js b/packages/rn-tester/js/hybridshop/screens/FeedScreen.js
+new file mode 100644
+index 0000000..0e674f0
+--- /dev/null
++++ b/packages/rn-tester/js/hybridshop/screens/FeedScreen.js
+@@ -0,0 +1,116 @@
++/**
++ * @format
++ * @noflow
++ */
++
++'use strict';
++
++const React = require('react');
++const {FlatList, Text, View, ActivityIndicator, StyleSheet} = require('react-native');
++const Header = require('../components/Header');
++const ProductCard = require('../components/ProductCard');
++const PrimaryButton = require('../components/PrimaryButton');
++const {fetchProducts, fetchFreshBatch} = require('../data/api');
++const {useTheme} = require('../theme');
++const perf = require('../perf');
++
++function FeedScreen({navigate, cart, autopilot}) {
++  const {colors} = useTheme();
++  const [products, setProducts] = React.useState(null);
++
++  React.useEffect(() => {
++    let alive = true;
++    fetchProducts(60).then(items => {
++      if (alive) {
++        setProducts(items);
++      }
++    });
++    return () => {
++      alive = false;
++    };
++  }, []);
++
++  // First commit that actually shows feed content = TTI.
++  const hasData = products != null;
++  React.useLayoutEffect(() => {
++    if (hasData) {
++      perf.measureFromT0('TTI(feed rendered)');
++      if (autopilot != null) {
++        autopilot.onFeedReady();
++      }
++    }
++  }, [hasData, autopilot]);
++
++  const refresh = React.useCallback(() => {
++    const t0 = Date.now();
++    return fetchFreshBatch(20).then(fresh => {
++      setProducts(prev => fresh.concat(prev == null ? [] : prev).slice(0, 120));
++      return Date.now() - t0;
++    });
++  }, []);
++
++  React.useEffect(() => {
++    if (autopilot != null) {
++      autopilot.registerRefresh(refresh);
++    }
++  }, [autopilot, refresh]);
++
++  const openProduct = React.useCallback(
++    product => navigate('detail', {product}),
++    [navigate],
++  );
++  const addToCart = React.useCallback(
++    product => cart.dispatch({type: 'add', product}),
++    [cart],
++  );
++
++  const renderItem = React.useCallback(
++    ({item}) => <ProductCard product={item} onOpen={openProduct} onAdd={addToCart} />,
++    [openProduct, addToCart],
++  );
++  const keyExtractor = React.useCallback(item => String(item.id), []);
++
++  const cartCount = cart.state.items.reduce((n, i) => n + i.qty, 0);
++
++  return (
++    <View style={[styles.root, {backgroundColor: colors.bg}]}>
++      <Header
++        title="HybridShop"
++        right={
++          <PrimaryButton
++            label={'Cart (' + cartCount + ')'}
++            onPress={() => navigate('cart')}
++            compact
++          />
++        }
++      />
++      {products == null ? (
++        <View style={styles.loading}>
++          <ActivityIndicator size="large" color={colors.accent} />
++          <Text style={[styles.loadingText, {color: colors.subtext}]}>Loading catalog…</Text>
++        </View>
++      ) : (
++        <FlatList
++          data={products}
++          renderItem={renderItem}
++          keyExtractor={keyExtractor}
++          contentContainerStyle={styles.list}
++          initialNumToRender={12}
++        />
++      )}
++      <View style={styles.footerRow}>
++        <PrimaryButton label="Settings" onPress={() => navigate('settings')} compact />
++      </View>
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  root: {flex: 1},
++  loading: {flex: 1, alignItems: 'center', justifyContent: 'center'},
++  loadingText: {marginTop: 10, fontSize: 14},
++  list: {paddingVertical: 6},
++  footerRow: {padding: 10, alignItems: 'center'},
++});
++
++module.exports = FeedScreen;
+diff --git a/packages/rn-tester/js/hybridshop/screens/SettingsScreen.js b/packages/rn-tester/js/hybridshop/screens/SettingsScreen.js
+new file mode 100644
+index 0000000..1e24aed
+--- /dev/null
++++ b/packages/rn-tester/js/hybridshop/screens/SettingsScreen.js
+@@ -0,0 +1,67 @@
++/**
++ * Lazily required (see DetailScreen).
++ *
++ * @format
++ * @noflow
++ */
++
++'use strict';
++
++const React = require('react');
++const {Switch, Text, View, StyleSheet} = require('react-native');
++const Header = require('../components/Header');
++const {useTheme} = require('../theme');
++
++function SettingRow({label, children}) {
++  const {colors} = useTheme();
++  return (
++    <View style={[styles.row, {backgroundColor: colors.card}]}>
++      <Text style={[styles.label, {color: colors.text}]}>{label}</Text>
++      {children}
++    </View>
++  );
++}
++
++function SettingsScreen({goBack}) {
++  const theme = useTheme();
++  const {colors} = theme;
++  const [notify, setNotify] = React.useState(true);
++  return (
++    <View style={[styles.root, {backgroundColor: colors.bg}]}>
++      <Header title="Settings" onBack={goBack} />
++      <View style={styles.content}>
++        <SettingRow label="Dark theme">
++          <Switch
++            value={theme.name === 'dark'}
++            onValueChange={theme.toggle}
++            testID="theme-switch"
++          />
++        </SettingRow>
++        <SettingRow label="Order notifications">
++          <Switch value={notify} onValueChange={setNotify} />
++        </SettingRow>
++        <Text style={[styles.footnote, {color: colors.subtext}]}>
++          HybridShop trial build — module dispatch is per-content-hash; OTA-changed
++          modules fall back to the interpreter individually.
++        </Text>
++      </View>
++    </View>
++  );
++}
++
++const styles = StyleSheet.create({
++  root: {flex: 1},
++  content: {padding: 12},
++  row: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'space-between',
++    borderRadius: 12,
++    padding: 14,
++    marginBottom: 8,
++  },
++  label: {fontSize: 15, fontWeight: '600'},
++  footnote: {fontSize: 12, lineHeight: 17, marginTop: 14, textAlign: 'center'},
++});
++
++module.exports = SettingsScreen;
+diff --git a/packages/rn-tester/js/hybridshop/theme.js b/packages/rn-tester/js/hybridshop/theme.js
+new file mode 100644
+index 0000000..e90568b
+--- /dev/null
++++ b/packages/rn-tester/js/hybridshop/theme.js
+@@ -0,0 +1,41 @@
++/**
++ * @format
++ * @noflow
++ */
++
++'use strict';
++
++const React = require('react');
++
++const palettes = {
++  light: {
++    bg: '#f2f4f8',
++    card: '#ffffff',
++    text: '#16181d',
++    subtext: '#5c6470',
++    accent: '#2a6df4',
++    accentText: '#ffffff',
++    divider: '#e3e7ee',
++  },
++  dark: {
++    bg: '#101318',
++    card: '#1c2129',
++    text: '#eef1f6',
++    subtext: '#98a2b3',
++    accent: '#5b8cff',
++    accentText: '#0b1220',
++    divider: '#2a303b',
++  },
++};
++
++const ThemeContext = React.createContext({
++  name: 'light',
++  colors: palettes.light,
++  toggle: () => {},
++});
++
++function useTheme() {
++  return React.useContext(ThemeContext);
++}
++
++module.exports = {ThemeContext, palettes, useTheme};
 -- 
 2.50.1 (Apple Git-155)
 

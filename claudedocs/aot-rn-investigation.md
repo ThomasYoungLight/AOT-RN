@@ -603,6 +603,32 @@ Bonus fail-safe sighting: mid-experiment, a bundle newer than the unit correctly
 
 Artifacts: eval timing + `__hybridEvalMs` in `ReactInstance.cpp`; execution recorder in `hybrid-serializer.js` prelude; profile dump in `HybridAOTDemo.js`; `load_profile`/selection in `build-rn-registry.py`; checked-in profiles under `bench/hybrid/profiles/`; ring-1 `.o` now independently optional in CMake.
 
+### Experiment 17 (2026-08-02): the real-app trial — HybridShop
+
+Everything before ran on RNTester's example registry or synthetic benchmarks. This experiment puts a real app shape through the full pipeline: **HybridShop** (`packages/rn-tester/js/hybridshop/`, 13 modules) — a FlatList catalog over a fake async API (constant 80 ms latency), hand-rolled stack navigation whose detail/cart/settings screens are `require()`d **lazily** on first open, theme context, memoized components, images — rendered through the NORMAL RN pipeline (ReactFabric; the takeover demo is flag-parked). A deterministic auto-pilot drives a session and logs timings: TTI (bundle-eval start → feed rendered with data), first-open per lazy screen, theme-toggle, refresh bursts.
+
+**The whole bundle compiles.** Ring-1 policy widened from `^js/` to everything: **807/807 (Android) and 811/811 (iOS) modules pass the compile probe** — all of RN core, the shipped ReactFabric renderer, node_modules, babel helpers. Zero failures. The full unit: 14.8 MB `.o` per platform.
+
+**Android matrix (S23 Ultra; stripped `libreactnative.so` / release APK; TTI includes the 80 ms API latency):**
+
+| variant | native modules | lib | APK | TTI | nav(detail) first-open | ring1 eval |
+|---|---|---|---|---|---|---|
+| none | 2 | 7.27 MB | 21.92 MB | 158–172 ms | 14–30 ms | — |
+| profiled | 514 | 14.53 MB | 29.18 MB | 153–155 ms | 15–31 ms | 2–3.5 ms |
+| full | 809 | 16.80 MB | 31.45 MB | 159 ms | 19 ms | 2.3 ms |
+
+iPhone 15 Pro Max (full): TTI 112 ms, nav(detail) 12 ms, eval 1.9 ms, native=813.
+
+**Finding 1 — TTI is not where AOT pays.** All three variants land in the same 153–172 ms band (JS-side startup ≈ 73–92 ms once the constant API latency is subtracted). On flagship hardware, Hermes' lazy bytecode startup is already so good that ahead-of-time machine code does not move TTI measurably, even with the ENTIRE bundle native. (Low-end devices untested — the calculus may differ there.) This sharpens the architecture's value story: **AOT buys sustained JS work** (the reconciler benches: 1.6–1.9×), not startup; compile the framework's hot paths (ring 0) and profile-hot product code (ring 1), not the world for TTI's sake.
+
+**Finding 2 — the profile policy earns its keep on a lazy-nav app.** The startup-window profile (session profile truncated offline at the first lazy-screen require — no code change needed) keeps 513 of 807 modules: **36% cold** (vs RNTester's 22%), including exactly the three lazy screens and their exclusive deps, saving 2.27 MB of the 9.53 MB full-AOT weight. In the profiled build, the auto-pilot navigates to the cold screens and they run **interpreted, seamlessly** — the fallback IS the lazy path, live-verified.
+
+**Finding 3 — everything holds under a real app.** Per-call hashes, per-platform units, ring-0 typed core, dispatch fail-safes — all behaved identically under a component-tree app with navigation, lists, timers, images, and Pressability. Screenshot-verified (dark theme persisted from the auto-pilot's settings visit).
+
+Trial-infra notes: `__hybridT0` stamped in the dispatch prelude anchors TTI at bundle-eval start; Metro constant-folds `if (false)` blocks AND drops requires whose binding is only used in dead code — the fabric twin must stay referenced from live exports or the ring-0 unit silently unkeys; Android logcat measurement runs must be tag-filtered (`-s ReactNativeJS`) and buffer-cleared — stale lines produced two bogus readings before the clean protocol.
+
+Artifacts: `js/hybridshop/**` (app + auto-pilot), whole-bundle `RING1_INCLUDE`, startup profiles for the shop app under `bench/hybrid/profiles/`, TTI anchor in `hybrid-serializer.js`.
+
 ### Rejected alternatives
 
 - **Dual engine / native core + JS islands** (Valdi-style): two heaps, serialization at every boundary, function-identity hazards.

@@ -60,10 +60,11 @@ PROBE_DIR = OUT / "ring1-probe"
 PROBE_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- ring-1 selection policy ---
-# Product code (the app's own modules). Framework/node_modules stay out by
-# default: RN core is ring-0 territory (typed ports), and the two ring-0
-# twins must never be double-registered.
-RING1_INCLUDE = [re.compile(r"^js/")]
+# WHOLE BUNDLE: every manifest module (app code, RN core, node_modules) is a
+# candidate — the compile probe skips what shermes can't take and the hash
+# dispatch fail-safes anything stale. Only the ring-0 twins are excluded
+# (they must never be double-registered; their typed ports own those slots).
+RING1_INCLUDE = [re.compile(r"")]
 RING1_EXCLUDE = [
     re.compile(r"^js/hybrid/HybridReactCore\.js$"),
     re.compile(r"^js/hybrid/HybridFabricCore\.js$"),
