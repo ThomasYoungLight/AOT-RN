@@ -13,7 +13,8 @@
 """
 import argparse
 
-from . import bundle, ci, config, doctor, gates, install, ota, profile_cmd, sweep, units, verify
+from . import (bundle, ci, config, doctor, gates, install, ota, profile_cmd,
+               sweep, sweep_ios, units, verify)
 
 
 def _platforms_arg(p):
@@ -78,6 +79,10 @@ def main(argv=None):
     p.add_argument("--b", default="control", help="second variant (compare)")
     p.add_argument("--baseline", default=None,
                    help="self-noise compare name, e.g. control-vs-control2")
+    p.add_argument("--target", default="android",
+                   choices=["android", "device", "simulator"],
+                   help="android (adb) | device (iOS phone, stability only) "
+                        "| simulator (iOS, full pixel capture)")
     p.add_argument("--events", type=int, default=3000,
                    help="random events to inject (soak)")
 
@@ -110,6 +115,9 @@ def main(argv=None):
     elif args.cmd == "ota-impact":
         ota.cmd_ota_impact(cfg, args)
     elif args.cmd == "sweep":
-        sweep.cmd_sweep(cfg, args)
+        if args.action == "run" and args.target in ("device", "simulator"):
+            sweep_ios.cmd_sweep_ios(cfg, args)
+        else:
+            sweep.cmd_sweep(cfg, args)
     elif args.cmd == "ci":
         ci.cmd_ci(cfg, args)

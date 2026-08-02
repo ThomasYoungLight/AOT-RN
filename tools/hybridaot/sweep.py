@@ -28,7 +28,7 @@ from .runner import log, step
 ERROR_RE = re.compile(
     r"(FATAL EXCEPTION|AndroidRuntime.*?Exception|ReactNoCrashSoftException|"
     r"Unhandled (JS|SoftException)|Error: |Invariant Violation|"
-    r"RedBox|ReactNativeJS.*?Exception|com\.facebook\.react\.common\.JavascriptException)",
+    r"RedBox|ReactNativeJS.*?Exception|\[HybridErr\]|com\.facebook\.react\.common\.JavascriptException)",
     re.I)
 # noise that is expected on a release build and not a stability signal
 IGNORE_RE = re.compile(
