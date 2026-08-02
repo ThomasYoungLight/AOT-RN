@@ -13,7 +13,7 @@
 """
 import argparse
 
-from . import bundle, ci, config, doctor, gates, install, ota, profile_cmd, units, verify
+from . import bundle, ci, config, doctor, gates, install, ota, profile_cmd, sweep, units, verify
 
 
 def _platforms_arg(p):
@@ -66,6 +66,21 @@ def main(argv=None):
     p.add_argument("--max-hot-shadowed", type=int, default=None,
                    help="fail if more than N hot (profiled) modules would be shadowed")
 
+    p = sub.add_parser("sweep", help="app-surface stability + visual-parity sweep")
+    p.add_argument("action", choices=["run", "compare", "soak", "reanalyze"])
+    p.add_argument("--variant", default="hybrid",
+                   help="label for this run's captures (run)")
+    p.add_argument("--settle", type=float, default=1.6,
+                   help="seconds to wait after each deep-link navigation")
+    p.add_argument("--limit", type=int, default=None,
+                   help="only sweep the first N screens")
+    p.add_argument("--a", default="hybrid", help="first variant (compare)")
+    p.add_argument("--b", default="control", help="second variant (compare)")
+    p.add_argument("--baseline", default=None,
+                   help="self-noise compare name, e.g. control-vs-control2")
+    p.add_argument("--events", type=int, default=3000,
+                   help="random events to inject (soak)")
+
     p = sub.add_parser("ci", help="doctor -> bundle -> units -> gate")
     _platforms_arg(p)
     p.add_argument("--ring1-all", action="store_true")
@@ -94,5 +109,7 @@ def main(argv=None):
         profile_cmd.cmd_profile(cfg, args)
     elif args.cmd == "ota-impact":
         ota.cmd_ota_impact(cfg, args)
+    elif args.cmd == "sweep":
+        sweep.cmd_sweep(cfg, args)
     elif args.cmd == "ci":
         ci.cmd_ci(cfg, args)

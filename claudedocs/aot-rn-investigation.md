@@ -712,6 +712,25 @@ Each command productizes an operational failure mode the investigation hit by ha
 
 Deliberately out of v0: extracting the serializer as a versioned npm package (waits for a second integrating app), OTA delivery infrastructure, device farms.
 
+### Experiment 22 (2026-08-02): app-surface stability + visual parity on a complex app
+
+Micro-benchmarks and checksum gates prove the reconciler is equivalent; they say nothing about whether a *whole app* built this way is stable and pixel-correct. The test surface: **RNTester itself** — Meta's kitchen-sink app, 76 example screens covering nearly every RN component and API, all of it flowing through the hybrid pipeline (522 modules native).
+
+**Method** (`hybridaot sweep`): two builds from the **identical Metro bundle** — hybrid (ring 0 bound, `impl=native-typed-port`) versus a **control with the unit `.o`s unlinked** (`__nativeModules: ABSENT` ⇒ every module interpreted ⇒ stock React Native behavior). Each build is walked screen-by-screen via `rntester://example/<key>` deep links with screenshot capture and PID-scoped logcat scanning, then compared.
+
+**Two methodological pieces made the result trustworthy:**
+1. **A real pixel comparison** — screenshots are PNG-decoded (row-filter reversal), the status-bar clock and nav-bar bands cropped, and the rest averaged into a grayscale grid. A naive whole-file hash reported "76/76 screens differ" purely because the clock ticked.
+2. **A self-noise baseline** — the *same binary* swept twice. Animated screens (spinners, transforms, button press states, a fading toast) differ from themselves run-to-run, so a screen only counts as divergent when the cross-variant difference exceeds its own run-to-run variation.
+
+**Results — no stability or rendering issues found:**
+- **76/76 screens rendered** on both builds; app alive at the end of every run; **zero crashes, ANRs, or JS exceptions** attributable to the app in either variant. The only RN-side messages were identical across variants (two conditionally-registered Observer examples absent from this build; one benign `MissingViewState` soft exception).
+- **72/76 screens pixel-identical.** The 4 that differ are all animated, and each differs from itself *more* than it differs across variants — e.g. ButtonExample: 58 cells cross-variant vs **68,157 cells** (25.7% of the screen) between two runs of the same binary; LegacyModuleExample 12,850 vs 13,065 (visually confirmed: the same "Method: constantsToExport" toast caught at different fade opacity). **Real divergences: 0.**
+- **Soak**: 3,000 random monkey events on each build — no crash, no ANR, no app errors on either.
+
+**Two harness bugs the run exposed** (now fixed in the tool, and both are exactly the kind of false alarm a naive comparison would have shipped as a "bug"): the device dozing mid-sweep returned solid-black captures that scored as 99.9% divergence — the sweep now wakes the display, dismisses the keyguard, stretches the screen timeout, warms up until a non-blank frame arrives, and hard-fails on blank captures; and device-wide logcat was counting other apps' failures (a camera service, a VPN tunnel) as app errors — error scanning is now PID-scoped.
+
+Caveat: this is one app on one device (Galaxy S23 Ultra). It is a *broad* app — the component and API surface is essentially RN's whole public catalog — but breadth of surface is not the same as breadth of hardware or of third-party native modules.
+
 ### Rejected alternatives
 
 - **Dual engine / native core + JS islands** (Valdi-style): two heaps, serialization at every boundary, function-identity hazards.

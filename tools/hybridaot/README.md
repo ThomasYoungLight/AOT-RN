@@ -66,6 +66,31 @@ Launches the app, captures the dispatch prelude's executed-module dump,
 writes `bench/hybrid/profiles/<name>-<platform>.json`. The next `units` run
 selects ring-1 candidates from it automatically.
 
+**App-surface stability + visual parity** (`sweep`): walks RNTester's 76
+example screens by deep link on two builds from the *same bundle* — hybrid
+vs an all-interpreted control (units unlinked ⇒ stock RN behavior) —
+capturing screenshots and PID-scoped error logs, then compares.
+
+```bash
+# hybrid build installed
+python3 -m tools.hybridaot sweep run --variant hybrid
+python3 -m tools.hybridaot sweep run --variant hybrid2      # self-noise baseline
+python3 -m tools.hybridaot sweep soak --variant hybrid --events 3000
+# control build installed (mv bench/hybrid/out/rn/*.o aside, touch CMakeLists, reinstall)
+python3 -m tools.hybridaot sweep run --variant control
+python3 -m tools.hybridaot sweep compare --a hybrid --b hybrid2   # -> self-noise
+python3 -m tools.hybridaot sweep compare --a hybrid --b control \
+        --baseline hybrid-vs-hybrid2                              # -> verdict
+```
+
+The baseline matters: animated screens (spinners, transforms, press states,
+toasts) differ between two runs of the *same binary*, so a screen only counts
+as divergent when the cross-variant difference exceeds that screen's own
+run-to-run noise. Screenshots are decoded to grayscale grids with the
+status-bar and nav-bar bands cropped; `soak` adds a random-input monkey run.
+`sweep reanalyze` rescoring stored PNGs lets the metric evolve without
+re-running the device.
+
 **CI** (device-free): `python3 -m tools.hybridaot ci` = doctor(essential) →
 bundle → units → gate; summary in `out/hybridaot/ci-summary.json`.
 
