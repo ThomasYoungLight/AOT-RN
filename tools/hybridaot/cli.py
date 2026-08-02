@@ -85,6 +85,8 @@ def main(argv=None):
                         "| simulator (iOS, full pixel capture)")
     p.add_argument("--screens", default="",
                    help="comma-separated screen keys (noise)")
+    p.add_argument("--soak-delay", type=float, default=1.2,
+                   help="seconds between soak navigations (iOS)")
     p.add_argument("--repeats", type=int, default=6,
                    help="captures per screen (noise)")
     p.add_argument("--no-shots", action="store_true",
@@ -123,7 +125,9 @@ def main(argv=None):
     elif args.cmd == "ota-impact":
         ota.cmd_ota_impact(cfg, args)
     elif args.cmd == "sweep":
-        if args.action == "noise":
+        if args.action == "soak" and args.target in ("device", "simulator"):
+            sweep_ios.cmd_soak_ios(cfg, args)
+        elif args.action == "noise":
             sweep_ios.cmd_noise(cfg, args)
         elif args.action == "run" and args.target in ("device", "simulator"):
             sweep_ios.cmd_sweep_ios(cfg, args)

@@ -274,3 +274,120 @@ def cmd_noise(cfg, args):
                                              for k, v in noise.items()]}, indent=2))
     log(f"wrote {out}")
     return noise
+
+
+def _ios_pid(cfg):
+    out = runner.run(["xcrun", "devicectl", "device", "info", "processes",
+                      "--device", cfg.ios_udid], capture=True, quiet=True,
+                     check=False) or ""
+    for line in out.splitlines():
+        if "RNTester.app/RNTester" in line:
+            return line.split()[0]
+    return None
+
+
+def cmd_soak_ios(cfg, args):
+    """iOS stress: randomized navigation + lifecycle churn.
+
+    iOS has no `adb monkey` equivalent and no supported touch injection
+    outside XCUITest/WebDriverAgent, so this stresses what the hybrid layer
+    actually changes — JS execution, module dispatch, reconciler mount and
+    unmount, native-module calls, and cold start — rather than gestures.
+    Crash detection is a real signal here: the PID must stay stable, because
+    a JS crash on iOS takes the process down or restarts it.
+    """
+    import random
+    import subprocess as sp
+    keys = _keys(cfg)
+    rnd = random.Random(args.events)  # deterministic sequence per event count
+    outdir = cfg.out / "sweep" / args.variant
+    outdir.mkdir(parents=True, exist_ok=True)
+    step(f"soak-ios[{args.variant}]: {args.events} navigation/lifecycle events")
+
+    logf = outdir / "soak-console.log"
+    f = open(logf, "w")
+    proc = sp.Popen(
+        ["xcrun", "devicectl", "device", "process", "launch", "--device",
+         cfg.ios_udid, "--terminate-existing", "--console", cfg.ios_bundle_id],
+        stdout=f, stderr=sp.STDOUT, text=True)
+    time.sleep(10)
+    start_pid = _ios_pid(cfg)
+    log(f"  start pid {start_pid}")
+
+    injected, relaunches, pid_changes, observed_restarts = 0, 0, 0, 0
+    last_pid = start_pid
+    for i in range(args.events):
+        roll = rnd.random()
+        key = rnd.choice(keys)
+        if roll < 0.08:
+            # cold-start churn: kill and relaunch straight into a screen
+            runner.run(["xcrun", "devicectl", "device", "process", "launch",
+                        "--device", cfg.ios_udid, "--terminate-existing",
+                        "--payload-url", f"rntester://example/{key}",
+                        cfg.ios_bundle_id], capture=True, quiet=True, check=False)
+            relaunches += 1
+            time.sleep(3.0)
+            # verify the restart actually happened: a --console session owns
+            # the process and can refuse --terminate-existing, which would
+            # silently turn "cold-start churn" into ordinary navigation
+            pid_now = _ios_pid(cfg)
+            if pid_now is not None and pid_now != last_pid:
+                observed_restarts += 1
+                last_pid = pid_now
+        else:
+            runner.run(["xcrun", "devicectl", "device", "process", "launch",
+                        "--device", cfg.ios_udid, "--no-activate",
+                        "--payload-url", f"rntester://example/{key}",
+                        cfg.ios_bundle_id], capture=True, quiet=True, check=False)
+            time.sleep(args.soak_delay)
+        if roll > 0.93:
+            # native-module pressure between navigations
+            runner.run(["xcrun", "devicectl", "device", "process", "launch",
+                        "--device", cfg.ios_udid, "--no-activate",
+                        "--payload-url", f"rntester://hybridshot/soak{i}",
+                        cfg.ios_bundle_id], capture=True, quiet=True, check=False)
+        injected += 1
+        if injected % 25 == 0:
+            pid = _ios_pid(cfg)
+            if pid is None:
+                log(f"  !! app GONE after {injected} events")
+                break
+            if pid != last_pid:
+                # expected after a deliberate relaunch, suspicious otherwise
+                pid_changes += 1
+                last_pid = pid
+            log(f"  {injected}/{args.events} events (pid {pid})")
+
+    time.sleep(2)
+    # liveness must be read BEFORE tearing down the console session: a
+    # `devicectl launch --console` session owns the process and kills it on
+    # exit, which would otherwise look exactly like a crash
+    end_pid = _ios_pid(cfg)
+    proc.terminate()
+    f.close()
+    text = logf.read_text(errors="replace")
+    errors = [l for l in text.splitlines()
+              if IOS_ERROR_RE.search(l) and not IOS_IGNORE_RE.search(l)]
+    summary = {
+        "variant": args.variant,
+        "platform": "ios-device",
+        "requested": args.events,
+        "injected": injected,
+        "relaunchAttempts": relaunches,
+        "observedRestarts": observed_restarts,
+        "pidChanges": pid_changes,
+        "unexpectedPidChanges": max(pid_changes - relaunches, 0),
+        "aliveAtEnd": end_pid is not None,
+        "errorCount": len(errors),
+        "errors": errors[:30],
+    }
+    (outdir / "soak.json").write_text(json.dumps(summary, indent=2))
+    print(f"  events injected:  {injected}/{args.events} "
+          f"({relaunches} relaunch attempts, {observed_restarts} verified restarts)")
+    print(f"  app alive at end: {summary['aliveAtEnd']} (pid {end_pid})")
+    print(f"  unexpected pid changes: {summary['unexpectedPidChanges']}")
+    print(f"  error lines:      {len(errors)}")
+    for e in errors[:8]:
+        print(f"    ! {e[:150]}")
+    log(f"wrote {outdir}/soak.json")
+    return summary
