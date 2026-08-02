@@ -175,8 +175,8 @@ def _decode_png_gray(path, crop_top=96, crop_bottom=48, downscale=4):
     return {"grid": grid, "w": gw, "h": gh, "size": [width, height]}
 
 
-def _png_signature(path):
-    g = _decode_png_gray(path)
+def _png_signature(path, crop_top=96, crop_bottom=48):
+    g = _decode_png_gray(path, crop_top=crop_top, crop_bottom=crop_bottom)
     return {
         "hash": zlib.crc32(bytes(g["grid"])) & 0xFFFFFFFF,
         "grid": g["grid"],
@@ -386,22 +386,33 @@ def _compare(cfg, args):
     # (animations, toasts, spinners are inherently nondeterministic).
     verdict = None
     if args.baseline:
-        bl_path = cfg.out / "sweep" / f"compare-{args.baseline}.json"
-        if bl_path.exists():
-            bl = {d["key"]: d["cells"] for d in json.loads(bl_path.read_text())["differing"]}
+        # Several self-baselines may be given (comma-separated): a SINGLE
+        # same-binary run can under-report a screen's noise by catching two
+        # matching animation phases, so take the worst case per screen.
+        bl, missing = {}, []
+        for nm in args.baseline.split(","):
+            nm = nm.strip()
+            bl_path = cfg.out / "sweep" / (
+                f"{nm}.json" if nm.startswith("noise-") else f"compare-{nm}.json")
+            if not bl_path.exists():
+                missing.append(str(bl_path))
+                continue
+            for d in json.loads(bl_path.read_text())["differing"]:
+                bl[d["key"]] = max(bl.get(d["key"], 0), d["cells"])
+        for m in missing:
+            print(f"  (baseline {m} not found)")
+        if bl or not missing:
             real, noise = [], []
             for d in differing:
                 nz = bl.get(d["key"], 0)
                 (real if d["cells"] > max(nz * 1.5, nz + 200) else noise).append(
                     {**d, "selfNoiseCells": nz})
             verdict = {"realDivergences": real, "withinSelfNoise": noise}
-            print(f"\n  baseline {args.baseline}:")
+            print(f"\n  baseline {args.baseline} (worst-case per screen):")
             print(f"    within self-noise:  {len(noise)}  "
                   + ", ".join(f"{d['key']}({d['cells']}v{d['selfNoiseCells']})" for d in noise))
             print(f"    REAL divergences:   {len(real)}  "
                   + ", ".join(f"{d['key']}({d['cells']}v{d['selfNoiseCells']})" for d in real))
-        else:
-            print(f"  (baseline {bl_path} not found)")
 
     result = {
         "a": args.a, "b": args.b,

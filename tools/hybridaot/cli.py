@@ -68,7 +68,7 @@ def main(argv=None):
                    help="fail if more than N hot (profiled) modules would be shadowed")
 
     p = sub.add_parser("sweep", help="app-surface stability + visual-parity sweep")
-    p.add_argument("action", choices=["run", "compare", "soak", "reanalyze"])
+    p.add_argument("action", choices=["run", "compare", "soak", "reanalyze", "noise"])
     p.add_argument("--variant", default="hybrid",
                    help="label for this run's captures (run)")
     p.add_argument("--settle", type=float, default=1.6,
@@ -83,6 +83,14 @@ def main(argv=None):
                    choices=["android", "device", "simulator"],
                    help="android (adb) | device (iOS phone, stability only) "
                         "| simulator (iOS, full pixel capture)")
+    p.add_argument("--screens", default="",
+                   help="comma-separated screen keys (noise)")
+    p.add_argument("--repeats", type=int, default=6,
+                   help="captures per screen (noise)")
+    p.add_argument("--no-shots", action="store_true",
+                   help="iOS device: skip screenshots (stability only)")
+    p.add_argument("--shot-wait", type=float, default=1.4,
+                   help="seconds to wait for an in-app screenshot to land")
     p.add_argument("--events", type=int, default=3000,
                    help="random events to inject (soak)")
 
@@ -115,7 +123,9 @@ def main(argv=None):
     elif args.cmd == "ota-impact":
         ota.cmd_ota_impact(cfg, args)
     elif args.cmd == "sweep":
-        if args.action == "run" and args.target in ("device", "simulator"):
+        if args.action == "noise":
+            sweep_ios.cmd_noise(cfg, args)
+        elif args.action == "run" and args.target in ("device", "simulator"):
             sweep_ios.cmd_sweep_ios(cfg, args)
         else:
             sweep.cmd_sweep(cfg, args)
