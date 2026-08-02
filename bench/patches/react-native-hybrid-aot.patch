@@ -32,7 +32,7 @@ index 00bbc58..bb1a9f2 100644
            PUBLIC
              android
 diff --git a/packages/react-native/ReactCommon/react/runtime/ReactInstance.cpp b/packages/react-native/ReactCommon/react/runtime/ReactInstance.cpp
-index e6b8f12..c482f08 100644
+index e6b8f12..cb8ca98 100644
 --- a/packages/react-native/ReactCommon/react/runtime/ReactInstance.cpp
 +++ b/packages/react-native/ReactCommon/react/runtime/ReactInstance.cpp
 @@ -23,9 +23,23 @@
@@ -59,33 +59,38 @@ index e6b8f12..c482f08 100644
  namespace facebook::react {
  
  namespace {
-@@ -273,6 +287,60 @@ void ReactInstance::loadScript(
+@@ -273,6 +287,65 @@ void ReactInstance::loadScript(
            ReactMarker::logMarker(ReactMarker::APP_STARTUP_START);
          }
  
++        // Diagnostics bridge, installed UNCONDITIONALLY: RCTLog is compiled
++        // out in release builds, so without this an all-interpreted build
++        // (no units linked) has no log channel at all — which makes a
++        // hybrid-vs-interpreted comparison impossible to observe on iOS.
++        {
++          auto hybridLog = jsi::Function::createFromHostFunction(
++              runtime,
++              jsi::PropNameID::forAscii(runtime, "__hybridLog"),
++              1,
++              [](jsi::Runtime& rt,
++                 const jsi::Value&,
++                 const jsi::Value* args,
++                 size_t n) -> jsi::Value {
++                if (n > 0) {
++                  LOG(WARNING)
++                      << "[HybridAOT] " << args[0].toString(rt).utf8(rt);
++                }
++                return jsi::Value::undefined();
++              });
++          runtime.global().setProperty(runtime, "__hybridLog", hybridLog);
++        }
++
 +        // Hybrid AOT prototype: evaluate registry SHUnits BEFORE the bundle
 +        // so its __d prelude can dispatch per module by content hash. This is
 +        // additive: the bundle still evaluates normally below.
 +        if (sh_export_core != nullptr || sh_export_ring1 != nullptr ||
 +            sh_export_fabriccore != nullptr) {
 +          if (auto* hybridAPI = jsi::castInterface<hermes::IHermes>(&runtime)) {
-+            // Reliable log channel for the demo (RCTLog is compiled out in
-+            // release builds): glog goes to stderr on both platforms.
-+            auto hybridLog = jsi::Function::createFromHostFunction(
-+                runtime,
-+                jsi::PropNameID::forAscii(runtime, "__hybridLog"),
-+                1,
-+                [](jsi::Runtime& rt,
-+                   const jsi::Value&,
-+                   const jsi::Value* args,
-+                   size_t n) -> jsi::Value {
-+                  if (n > 0) {
-+                    LOG(WARNING)
-+                        << "[HybridAOT] " << args[0].toString(rt).utf8(rt);
-+                  }
-+                  return jsi::Value::undefined();
-+                });
-+            runtime.global().setProperty(runtime, "__hybridLog", hybridLog);
 +            // Per-unit evaluation timing, exposed to JS as
 +            // global.__hybridEvalMs (glog is not visible in logcat on
 +            // Android release builds).
@@ -642,10 +647,10 @@ index 0000000..cf88347
 +module.exports = {createModuleIdFactory, customSerializer};
 diff --git a/packages/rn-tester/js/HybridAOTDemo.js b/packages/rn-tester/js/HybridAOTDemo.js
 new file mode 100644
-index 0000000..3573e73
+index 0000000..85e5bf8
 --- /dev/null
 +++ b/packages/rn-tester/js/HybridAOTDemo.js
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,156 @@
 +/**
 + * Hybrid AOT prototype demo, Metro-plugin edition. The modules below are
 + * pulled in with ordinary require(); the hybrid-serializer's __d wrapper
@@ -660,6 +665,53 @@ index 0000000..3573e73
 +
 +const core = require('./hybrid/HybridReactCore');
 +const util = require('./hybrid/HybridUtil');
++
++// Test-harness error bridge: in release builds RN's console/RCTLog output is
++// compiled out on iOS, so a JS red-box error is invisible to a device console
++// capture. Route JS errors through the __hybridLog glog host function with a
++// greppable prefix so the sweep harness sees the same signal on both
++// platforms. Installed at module scope so it covers the whole session.
++(function installErrorBridge() {
++  const g: $FlowFixMe = global;
++  const emit = (kind: string, text: string) => {
++    const line = '[HybridErr] ' + kind + ': ' + text;
++    if (g.__hybridLog != null) {
++      g.__hybridLog(line);
++    }
++    /* eslint-disable-next-line no-console */
++    console.log(line);
++  };
++  const fmt = (args: $ReadOnlyArray<mixed>) =>
++    args
++      .map(a => {
++        if (a instanceof Error) {
++          return String(a.message) + ' | ' + String(a.stack).slice(0, 400);
++        }
++        try {
++          return typeof a === 'string' ? a : JSON.stringify(a);
++        } catch (e) {
++          return String(a);
++        }
++      })
++      .join(' ')
++      .slice(0, 600);
++
++  if (g.ErrorUtils != null && typeof g.ErrorUtils.setGlobalHandler === 'function') {
++    const prev = g.ErrorUtils.getGlobalHandler && g.ErrorUtils.getGlobalHandler();
++    g.ErrorUtils.setGlobalHandler((error: $FlowFixMe, isFatal: boolean) => {
++      emit(isFatal === true ? 'FATAL' : 'ERROR', fmt([error]));
++      if (typeof prev === 'function') {
++        prev(error, isFatal);
++      }
++    });
++  }
++  const origError = console.error;
++  /* eslint-disable-next-line no-console */
++  console.error = (...args: $ReadOnlyArray<mixed>) => {
++    emit('CONSOLE', fmt(args));
++    origError.apply(console, (args: $FlowFixMe));
++  };
++})();
 +
 +function runDemo() {
 +  /* eslint-disable no-console */
