@@ -11,6 +11,7 @@ function runConcurrentHarness(): void {
   RA.useDeferredValue = useDeferredValueImpl;
   RA.lazy = lazyImpl;
   RA.Suspense = SuspenseType;
+  RA.useSyncExternalStore = useSyncExternalStoreImpl;
 
   const appApi: any = installConcurrentApp(RA);
 

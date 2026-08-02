@@ -125,6 +125,43 @@ function installConcurrentApp(RA) {
     return panelLoadThenable;
   });
 
+  // external store (useSyncExternalStore)
+  var extStore = mkObj();
+  extStore.value = 0;
+  extStore.listeners = mkList();
+  function storeSubscribe(cb) {
+    extStore.listeners.push(cb);
+    return function () {
+      var idx = extStore.listeners.indexOf(cb);
+      if (idx !== -1) {
+        extStore.listeners.splice(idx, 1);
+      }
+    };
+  }
+  function storeGetSnapshot() {
+    return extStore.value;
+  }
+  exposed.mutateStore = function (v) {
+    extStore.value = v;
+    var ls = extStore.listeners.slice();
+    for (var li = 0; li < ls.length; li++) {
+      ls[li]();
+    }
+  };
+  // deliberately does NOT notify: only the pre-commit consistency check (or
+  // the passive updateStoreInstance re-check) can catch this
+  exposed.silentMutateStore = function (v) {
+    extStore.value = v;
+  };
+
+  // NOT memoized and takes the transition-driven seed, so it re-renders
+  // inside transition renders and pushes consistency checks there
+  function StoreBadge(props) {
+    var snap = RA.useSyncExternalStore(storeSubscribe, storeGetSnapshot);
+    fxMix(4500 + coerceInt(snap));
+    return h('view-store', {id: -9, s: snap, seed: props.seed, height: 18}, 'store ' + snap);
+  }
+
   function Row(props) {
     fxMix(9);
     var depsE = mkList();
@@ -267,6 +304,7 @@ function installConcurrentApp(RA) {
       pending: isPending,
     }));
     children.push(h(MemoPreview, {key: 1000001, dq: deferredQuery}));
+    children.push(h(StoreBadge, {key: 1000005, seed: markSeed}));
     if (showPanel) {
       children.push(h(RA.Suspense, {
         key: 1000002,
@@ -352,6 +390,21 @@ function runConcurrentDriver(app, ctl, log) {
       ctl.advance(100);
       return;
     }
+    if (tick === 300 || tick === 500) {
+      // store tearing: the transition render reads a snapshot that CHANGED
+      // since the last commit (so a consistency check is armed), then the
+      // store mutates again while the render is yielded — the completed
+      // concurrent render fails the pre-commit check and is re-rendered
+      // synchronously
+      exposed.applyMarks(tick % 79 + 1);
+      ctl.step(40); // urgent isPending render (blocking, renders sync)
+      exposed.silentMutateStore(tick % 11 + 1); // badge will read this...
+      ctl.step(12); // ...in the transition render, which then yields
+      exposed.silentMutateStore(tick % 11 + 2); // ...and this tears it
+      ctl.flushAll();
+      ctl.advance(100);
+      return;
+    }
     if (tick === 400) {
       // transition-suspend: a suspended transition never commits a fallback;
       // it waits (isPending stays true) until the data ping reschedules it
@@ -421,8 +474,12 @@ function runConcurrentDriver(app, ctl, log) {
       ctl.flushAll();
     } else {
       // urgent query change alone: preview lags one render behind
-      // (useDeferredValue spawns a transition-lane catch-up render)
+      // (useDeferredValue spawns a transition-lane catch-up render);
+      // every other time, also a notifying external-store update
       exposed.setQuery('qq' + (tick % 31));
+      if (tick % 2 === 0) {
+        exposed.mutateStore(tick % 13);
+      }
       ctl.flushAll();
     }
     ctl.advance(100);

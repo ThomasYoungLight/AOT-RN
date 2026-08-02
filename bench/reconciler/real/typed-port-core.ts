@@ -30,6 +30,7 @@ const DidCapture = 128;
 const Ref = 512;
 const Passive = 2048;
 const Visibility = 8192;
+const StoreConsistency = 16384;
 const Incomplete = 32768;
 const ShouldCapture = 65536;
 const ForceUpdateForLegacySuspense = 131072;
@@ -37,7 +38,7 @@ const HostEffectMask = 32767;
 const MutationMask = Placement | Update | ChildDeletion | Ref | Visibility;
 const LayoutMask = Update | Ref | Visibility;
 const PassiveMask = Passive | ChildDeletion;
-const LifecycleEffectMask = Passive | Update | Ref;
+const LifecycleEffectMask = Passive | Update | Ref | StoreConsistency;
 
 // ---- hook effect tags (HookFlags) ----
 const HookHasEffect = 1;
@@ -1583,6 +1584,132 @@ function useRefImpl(initialValue: any): any {
   return hook.memoizedState;
 }
 
+// ---- useSyncExternalStore (ReactFiberHooks: mount/updateSyncExternalStore) ----
+function checkIfSnapshotChanged(inst: any): boolean {
+  const latestGetSnapshot: any = inst.getSnapshot;
+  const prevValue: any = inst.value;
+  try {
+    const nextValue: any = latestGetSnapshot();
+    return !objectIs(prevValue, nextValue);
+  } catch (e) {
+    return true;
+  }
+}
+
+function forceStoreRerender(fiber: FiberNode): void {
+  const root = enqueueConcurrentRenderForLane(fiber, SyncLane);
+  if (root !== null) {
+    scheduleUpdateOnFiber(root, fiber, SyncLane, NoTimestamp);
+  }
+}
+
+function updateStoreInstance(fiber: FiberNode, inst: any, nextSnapshot: any, getSnapshot: any): void {
+  // updated in the passive phase; a mutation between render and commit
+  // (event before passive, or a layout effect) is caught here
+  inst.value = nextSnapshot;
+  inst.getSnapshot = getSnapshot;
+  if (checkIfSnapshotChanged(inst)) {
+    forceStoreRerender(fiber);
+  }
+}
+
+function subscribeToStoreEffect(fiber: FiberNode, inst: any, subscribe: any): any {
+  const handleStoreChange: any = function (): void {
+    if (checkIfSnapshotChanged(inst)) {
+      forceStoreRerender(fiber);
+    }
+  };
+  return subscribe(handleStoreChange);
+}
+
+function pushStoreConsistencyCheck(fiber: FiberNode, getSnapshot: any, renderedSnapshot: any): void {
+  fiber.flags |= StoreConsistency;
+  const check: any = mkObj();
+  check.getSnapshot = getSnapshot;
+  check.value = renderedSnapshot;
+  let componentUpdateQueue: any = fiber.updateQueue;
+  if (componentUpdateQueue === null) {
+    componentUpdateQueue = createFCUpdateQueue();
+    fiber.updateQueue = componentUpdateQueue;
+  }
+  const stores: any = componentUpdateQueue.stores;
+  if (stores === null || stores === undefined) {
+    const storesNew: any = new G.Array();
+    storesNew.push(check);
+    componentUpdateQueue.stores = storesNew;
+  } else {
+    stores.push(check);
+  }
+}
+
+function useSyncExternalStoreImpl(subscribe: any, getSnapshot: any): any {
+  const fiber = currentlyRenderingFiber;
+  if (fiber === null) {
+    throw new Error('hooks outside render');
+  }
+  if (isMountPhase) {
+    const hook = mountWorkInProgressHook();
+    const nextSnapshot: any = getSnapshot();
+    // unless rendering a blocking lane, schedule a pre-commit consistency
+    // check: right before committing we walk the tree and check whether any
+    // store was mutated during an interleaved event
+    if (workInProgressRoot === null) {
+      throw new Error('Expected a work-in-progress root.');
+    }
+    if (!includesBlockingLane(hooksRenderLanes)) {
+      pushStoreConsistencyCheck(fiber, getSnapshot, nextSnapshot);
+    }
+    hook.memoizedState = nextSnapshot;
+    const inst: any = mkObj();
+    inst.value = nextSnapshot;
+    inst.getSnapshot = getSnapshot;
+    hook.queue = inst;
+    const subDeps: any = new G.Array();
+    subDeps.push(subscribe);
+    useEffectImpl(function (): any {
+      return subscribeToStoreEffect(fiber, inst, subscribe);
+    }, subDeps);
+    fiber.flags |= Passive;
+    pushEffect(HookHasEffect | HookPassive, function (): any {
+      updateStoreInstance(fiber, inst, nextSnapshot, getSnapshot);
+      return undefined;
+    }, undefined, null);
+    return nextSnapshot;
+  }
+  const hook2 = updateWorkInProgressHook();
+  const nextSnapshot2: any = getSnapshot();
+  const prevSnapshot: any = hook2.memoizedState;
+  const snapshotChanged = !objectIs(prevSnapshot, nextSnapshot2);
+  if (snapshotChanged) {
+    hook2.memoizedState = nextSnapshot2;
+    didReceiveUpdate = true;
+  }
+  const inst2: any = hook2.queue;
+  const subDeps2: any = new G.Array();
+  subDeps2.push(subscribe);
+  useEffectImpl(function (): any {
+    return subscribeToStoreEffect(fiber, inst2, subscribe);
+  }, subDeps2);
+  // did the subscribe effect above actually get scheduled (deps changed)?
+  const effectHook: Hook | null = workInProgressHook;
+  const effectNode: any = effectHook !== null ? effectHook.memoizedState : null;
+  const subscribeEffectScheduled = effectNode !== null && (coerceInt(effectNode.tag) & HookHasEffect) !== 0;
+  if (inst2.getSnapshot !== getSnapshot || snapshotChanged || subscribeEffectScheduled) {
+    fiber.flags |= Passive;
+    pushEffect(HookHasEffect | HookPassive, function (): any {
+      updateStoreInstance(fiber, inst2, nextSnapshot2, getSnapshot);
+      return undefined;
+    }, undefined, null);
+    if (workInProgressRoot === null) {
+      throw new Error('Expected a work-in-progress root.');
+    }
+    if (!includesBlockingLane(hooksRenderLanes)) {
+      pushStoreConsistencyCheck(fiber, getSnapshot, nextSnapshot2);
+    }
+  }
+  return nextSnapshot2;
+}
+
 // ---- transitions (ReactFiberHooks: mount/updateTransition, startTransition) ----
 function startTransitionImpl(setPending: any, callback: any): void {
   const previousPriority = getCurrentUpdatePriority();
@@ -1675,6 +1802,7 @@ function createEffectNode(tag: number, create: any, destroy: any, deps: any): an
 function createFCUpdateQueue(): any {
   const q: any = mkObj();
   q.lastEffect = null;
+  q.stores = null;
   return q;
 }
 
@@ -3890,11 +4018,23 @@ function performConcurrentWorkOnRoot(root: FiberRootNode, didTimeout: boolean): 
     if (exitStatus === RootDidNotComplete) {
       markRootSuspendedWip(root, lanes);
     } else {
-      // external-store consistency check skipped (useSyncExternalStore not ported)
+      // the render completed: check that any rendered external stores are
+      // still consistent (a concurrent render may have yielded to an event
+      // that mutated a store)
       const finishedWork: FiberNode | null = root.current.alternate;
+      let finalExitStatus = exitStatus;
+      const renderWasConcurrent = !includesBlockingLane(lanes);
+      if (renderWasConcurrent && !isRenderConsistentWithExternalStores(finishedWork)) {
+        // a store was mutated in an interleaved event: render again,
+        // synchronously, to block further mutations
+        finalExitStatus = renderRootSync(root, lanes);
+        if (finalExitStatus === RootErrored || finalExitStatus === RootFatalErrored) {
+          throw new Error('render errored (error boundaries/recovery not ported)');
+        }
+      }
       root.finishedWork = finishedWork;
       root.finishedLanes = lanes;
-      finishConcurrentRender(root, exitStatus, lanes);
+      finishConcurrentRender(root, finalExitStatus, lanes);
     }
   }
   ensureRootIsScheduled(root, schedGetNow());
@@ -3905,6 +4045,54 @@ function performConcurrentWorkOnRoot(root: FiberRootNode, didTimeout: boolean): 
     };
   }
   return null;
+}
+
+function isRenderConsistentWithExternalStores(finishedWork: FiberNode | null): boolean {
+  if (finishedWork === null) {
+    return true;
+  }
+  let node: FiberNode = finishedWork;
+  while (true) {
+    if ((node.flags & StoreConsistency) !== NoFlags) {
+      const updateQueue: any = node.updateQueue;
+      if (updateQueue !== null) {
+        const checks: any = updateQueue.stores;
+        if (checks !== null && checks !== undefined) {
+          for (let i = 0; i < checks.length; i++) {
+            const check: any = checks[i];
+            const getSnapshot: any = check.getSnapshot;
+            const renderedValue: any = check.value;
+            try {
+              if (!objectIs(getSnapshot(), renderedValue)) {
+                return false;
+              }
+            } catch (e) {
+              return false;
+            }
+          }
+        }
+      }
+    }
+    const child = node.child;
+    if ((node.subtreeFlags & StoreConsistency) !== NoFlags && child !== null) {
+      child.ret = node;
+      node = child;
+      continue;
+    }
+    if (node === finishedWork) {
+      return true;
+    }
+    while (node.sibling === null) {
+      if (node.ret === null || node.ret === finishedWork) {
+        return true;
+      }
+      node = node.ret;
+    }
+    const sib: FiberNode = node.sibling;
+    sib.ret = node.ret;
+    node = sib;
+  }
+  return true; // unreachable; satisfies the checker
 }
 
 function jnd(timeElapsed: number): number {

@@ -64,6 +64,7 @@ var appApi = installConcurrentApp({
   useDeferredValue: React.useDeferredValue,
   lazy: React.lazy,
   Suspense: React.Suspense,
+  useSyncExternalStore: React.useSyncExternalStore,
 });
 
 var ctl = {
