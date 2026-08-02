@@ -1,0 +1,107 @@
+'use strict';
+// Concurrent baseline driver: the REAL react-reconciler (npm) on a
+// ConcurrentRoot, pumped by the deterministic scheduler (det-scheduler.cjs,
+// aliased over `scheduler` at bundle time), running the shared concurrent
+// workload against the shared recording host config.
+var React = require('react');
+var Reconciler = require('react-reconciler');
+
+var log = typeof print !== 'undefined' ? print : console.log;
+var g = globalThis;
+
+var HostConfig = {
+  supportsMutation: true,
+  supportsPersistence: false,
+  supportsHydration: false,
+  isPrimaryRenderer: true,
+  noTimeout: -1,
+  scheduleTimeout: function () { return -1; },
+  cancelTimeout: function () {},
+  getRootHostContext: function () { return null; },
+  getChildHostContext: function () { return null; },
+  getPublicInstance: function (i) { return i; },
+  prepareForCommit: function () { return null; },
+  resetAfterCommit: function () {},
+  preparePortalMount: function () {},
+  createInstance: function (type, props) { return hcCreateInstance(type, props); },
+  createTextInstance: function (text) { return hcCreateTextInstance(text); },
+  appendInitialChild: function (p, c) { hcAppendChild(p, c); },
+  finalizeInitialChildren: function () { return false; },
+  prepareUpdate: function (inst, type, oldProps, newProps) { return diffHostProps(oldProps, newProps); },
+  shouldSetTextContent: function () { return false; },
+  appendChild: function (p, c) { hcAppendChild(p, c); },
+  appendChildToContainer: function (ctr, c) { hcAppendChild(ctr, c); },
+  insertBefore: function (p, c, b) { hcInsertBefore(p, c, b); },
+  insertInContainerBefore: function (ctr, c, b) { hcInsertBefore(ctr, c, b); },
+  removeChild: function (p, c) { hcRemoveChild(p, c); },
+  removeChildFromContainer: function (ctr, c) { hcRemoveChild(ctr, c); },
+  resetTextContent: function () {},
+  commitTextUpdate: function (i, o, n) { hcCommitTextUpdate(i, o, n); },
+  commitMount: function () {},
+  commitUpdate: function (inst, payload, type, oldProps, newProps) { hcCommitUpdate(inst, payload, newProps); },
+  hideInstance: function (i) { hcHideInstance(i); },
+  unhideInstance: function (i, p) { hcUnhideInstance(i, p); },
+  hideTextInstance: function (i) { hcHideTextInstance(i); },
+  unhideTextInstance: function (i, t) { hcUnhideTextInstance(i, t); },
+  clearContainer: function (c) { c.children = []; },
+  detachDeletedInstance: function () {},
+  getCurrentEventPriority: function () { return 16; }, // DefaultEventPriority
+  getInstanceFromNode: function () { return null; },
+  beforeActiveInstanceBlur: function () {},
+  afterActiveInstanceBlur: function () {},
+  prepareScopeUpdate: function () {},
+  getInstanceFromScope: function () { return null; },
+};
+
+var R = Reconciler(HostConfig);
+
+var appApi = installConcurrentApp({
+  createElement: React.createElement,
+  useState: React.useState,
+  useEffect: React.useEffect,
+  useLayoutEffect: React.useLayoutEffect,
+  memo: React.memo,
+  useTransition: React.useTransition,
+  useDeferredValue: React.useDeferredValue,
+});
+
+var ctl = {
+  discrete: function (fn) { R.discreteUpdates(fn); },
+  flushAll: function () { g.__sched.flushAll(); },
+  step: function (n) { g.__sched.flushOne(n); },
+  advance: function (ms) { g.__sched.advance(ms); },
+};
+
+var driver = runConcurrentDriver(appApi, ctl, log);
+
+var rootContainer = {id: 0, type: 'root', children: []};
+var root = R.createContainer(
+  rootContainer, 1 /* ConcurrentRoot */, null, false, null, '',
+  function (e) { log('recoverableError: ' + e); }, null
+);
+R.updateContainer(
+  React.createElement(appApi.App, {initialItems: driver.initialItems}),
+  root, null, null
+);
+ctl.flushAll();
+
+driver.warmup();
+hostStatsReset();
+g.__schedTrace.sum = 0;
+
+var gcs0 = (typeof HermesInternal !== 'undefined' && HermesInternal.getInstrumentedStats)
+  ? HermesInternal.getInstrumentedStats() : null;
+var res = driver.run();
+
+log('real-react-reconciler-concurrent(18.3.1): ' + res.ticks + ' interactions, ' + res.rows + ' rows');
+log(hostStatsLine() + ' fx=' + res.fx + ' sched=' + (g.__schedTrace.sum >>> 0));
+log('schedStats: schedules=' + g.__schedTrace.schedules + ' cancels=' + g.__schedTrace.cancels +
+  ' runs=' + g.__schedTrace.runs + ' continuations=' + g.__schedTrace.continuations +
+  ' yields=' + g.__schedTrace.yields);
+log('TOTAL: ' + res.ms + ' ms  (' + (res.ms / res.ticks).toFixed(4) + ' ms/interaction)');
+if (gcs0 !== null) {
+  var gcs1 = HermesInternal.getInstrumentedStats();
+  log('GC: numGCs=' + (gcs1.js_numGCs - gcs0.js_numGCs) +
+    ' gcTime=' + (1000 * (gcs1.js_gcTime - gcs0.js_gcTime)).toFixed(1) + 'ms' +
+    ' allocated=' + ((gcs1.js_totalAllocatedBytes - gcs0.js_totalAllocatedBytes) / 1048576).toFixed(1) + 'MB');
+}
