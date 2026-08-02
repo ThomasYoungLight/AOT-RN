@@ -61,10 +61,25 @@ class Config:
         return self.profiles_dir / f"{self.profile_name}-{platform}.json"
 
 
+LOCAL_CONFIG_PATH = WORKSPACE / "hybridaot.config.local.json"
+
+
+def _merge(base, overlay):
+    for k, v in overlay.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            _merge(base[k], v)
+        else:
+            base[k] = v
+
+
 def load():
     raw = {}
     if CONFIG_PATH.exists():
         raw = json.loads(CONFIG_PATH.read_text())
+    # machine-specific values (device serials, team id, local tool paths)
+    # live in the gitignored local overlay
+    if LOCAL_CONFIG_PATH.exists():
+        _merge(raw, json.loads(LOCAL_CONFIG_PATH.read_text()))
     cfg = Config(raw)
     cfg.out.mkdir(parents=True, exist_ok=True)
     return cfg
