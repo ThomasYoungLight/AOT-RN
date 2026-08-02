@@ -693,6 +693,25 @@ Three production-hardening items in one pass.
 
 **On-device (S23 Ultra, real touch input via `adb input`, takeover surface on the typed unit):** tap → `selected 4` (grant → press-in → release → select); vertical drag from a row → `scrollSteals 1` and **no** selection (capture-steal → terminate). Same round validated 20b against the real C++ binding: the live commits ran the pass-children contract — `childSets=0 setAppends=0 completeRoots=1000`, 0.348–0.361 ms/commit (indistinguishable from the old contract's 0.358), and the fabric ring-0 unit now ships the new contract permanently. iPhone runs the same shared JS; remote touch injection isn't possible, so the responder behaviors are Android-verified.
 
+### Experiment 21 (2026-08-02): productization — the `hybridaot` toolchain
+
+The research program is complete; this experiment turns the pipeline into a product a team can operate. Design: `claudedocs/hybridaot-product-design.md`; code: `tools/hybridaot/` (Python CLI + `hybridaot.config.json` at the workspace root); `bench/hybrid/orchestrate.py` is now a shim.
+
+```
+hybridaot doctor | bundle | units | gate | build | install | verify | profile pull | ota-impact | ci
+```
+
+Each command productizes an operational failure mode the investigation hit by hand:
+
+- **`gate`** — the full 7-suite equivalence matrix in one command (~25 s wall, compiles parallelized): legacy×{mutation, persistent}, concurrent×{mutation, persistent}, pass-children×{legacy, concurrent} (tree-checksum axis), and **`ring0-unit`** — the actual registry unit source that ships in the binary, gated against the in-app twin. Results in `gate-results.json`; `units` stamps a copy next to its outputs, so every built unit is traceable to the gate run it passed.
+- **`units` freshness guard** — refuses codegen against a manifest older than any of its inputs (twins, port, serializer). The stale-manifest trap that silently unbound ring 0 twice (Experiments 11, 13) is now a build error instead of a quiet fallback; `build` composes bundle → units → gate in the safe order.
+- **`ota-impact`** — release-engineering foresight: diffs an OTA-candidate manifest against the **baked-manifest snapshot** (written by `units` — ground truth for binaries in the field) and reports shadowed/added/removed modules, % native retention by count and source KB, and — the number that matters — **shadowed hot modules** (intersection with the startup profile). `--max-hot-shadowed N` turns it into a release gate. Verified with a synthetic OTA edit: 1 shadowed module, correctly identified by path and flagged hot, exit 1 under the limit.
+- **`profile pull`** — the PGO capture loop as one command (force-stop, cleared tag-filtered logcat / `devicectl --console`, chunk parsing, ordered assembly). The fresh device pull reproduced the historical profile exactly and extended it (521 vs 513 executed modules — a strict superset with an identical execution-order prefix; the manual capture had been truncated).
+- **`verify`** — the on-device ring-0 assertion: launch, parse the demo's log stream, assert the typed unit is *bound* (not the silent fail-safe interpreter) and that device checksums equal the gate expectation. Both phones pass in one command (S23: 514 native modules, 0.756 ms/int; iPhone: 523, 0.442 — checksums `424919205/1208032539` matching `gate-results.json`).
+- **`doctor`** (13 toolchain/env/device checks) and **`ci`** (doctor → bundle → units → gate, `ci-summary.json`, device-free) close the loop; the README documents the dev-loop, OTA-release, PGO, and RN-upgrade workflows.
+
+Deliberately out of v0: extracting the serializer as a versioned npm package (waits for a second integrating app), OTA delivery infrastructure, device farms.
+
 ### Rejected alternatives
 
 - **Dual engine / native core + JS islands** (Valdi-style): two heaps, serialization at every boundary, function-identity hazards.

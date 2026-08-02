@@ -37,3 +37,5 @@ bench/reconciler/real/typed-entry-persistent.ts
 bench/reconciler/real/real-react-persistent-bundle.js
 bench/reconciler/real/twin-check*
 fabric-twin-entry.cjs
+__pycache__/
+out/

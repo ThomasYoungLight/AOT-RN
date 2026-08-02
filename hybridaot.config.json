@@ -1,0 +1,26 @@
+{
+  "reactNative": "react-native",
+  "hermes": "hermes",
+  "app": {
+    "dir": "react-native/packages/rn-tester",
+    "entry": {
+      "android": "js/RNTesterApp.android.js",
+      "ios": "js/RNTesterApp.ios.js"
+    },
+    "androidAppId": "com.facebook.react.uiapp",
+    "iosBundleId": "com.meta.RNTester.localDevelopment"
+  },
+  "devices": {
+    "android": "<ANDROID-SERIAL>",
+    "ios": "<IOS-DEVICE-UDID>"
+  },
+  "platforms": ["android", "ios"],
+  "bench": "bench/reconciler/real",
+  "unitsScript": "bench/hybrid/build-rn-registry.py",
+  "unitsOut": "bench/hybrid/out/rn",
+  "profilesDir": "bench/hybrid/profiles",
+  "profileName": "rn-tester-startup",
+  "iosTeam": "<APPLE-TEAM-ID>",
+  "iosDerivedData": "~/Library/Developer/Xcode/DerivedData/RNTesterPods-<DERIVED-DATA-HASH>",
+  "ndkClang": "~/Library/Android/sdk/ndk/27.1.12297006/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android24-clang"
+}
