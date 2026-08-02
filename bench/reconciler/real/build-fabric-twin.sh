@@ -26,6 +26,7 @@ function fhCreate(props, validAttributes) {
 }
 EOF
 cat fabric-host.inc.js >> fabric-twin-entry.cjs
+cat responder.inc.js >> fabric-twin-entry.cjs
 cat fabric-app.inc.js >> fabric-twin-entry.cjs
 cat fabric-core-js-body.js >> fabric-twin-entry.cjs
 

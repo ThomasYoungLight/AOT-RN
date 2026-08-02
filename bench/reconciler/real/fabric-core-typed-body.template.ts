@@ -11,6 +11,9 @@ function makeTypedFabricExports(): any {
 
   api.start = function (env: any): void {
     fhInit(env);
+    fabricState.responderSystem = createResponderSystem(function (fn: any): void {
+      flushSyncImpl(fn);
+    }, env.log);
     const RA: any = new G.Object();
     RA.createElement = createElementImpl;
     RA.useState = useStateImpl;
@@ -51,22 +54,7 @@ function makeTypedFabricExports(): any {
   };
 
   api.dispatchTouch = function (target: any, eventType: any, nativeEvent: any): void {
-    if (eventType !== 'topTouchEnd') {
-      return;
-    }
-    let f: any = target;
-    let guard = 0;
-    while (f !== null && f !== undefined && guard < 100) {
-      const p: any = f.memoizedProps;
-      if (p !== null && p !== undefined && typeof p.onPress === 'function') {
-        const cb: any = p.onPress;
-        const arg: any = p.rowId;
-        flushSyncImpl(function (): void { cb(arg); });
-        return;
-      }
-      f = f.ret;
-      guard++;
-    }
+    fabricState.responderSystem.handleEvent(target, eventType, nativeEvent);
   };
 
   return api;

@@ -97,23 +97,10 @@ function tickOnce() {
   });
 }
 
+var responderSystem = createResponderSystem(function (fn) { R.flushSync(fn); }, null);
+
 function dispatchTouch(target, eventType, nativeEvent) {
-  if (eventType !== 'topTouchEnd') {
-    return;
-  }
-  var f = target;
-  var guard = 0;
-  while (f != null && guard < 100) {
-    var p = f.memoizedProps;
-    if (p != null && typeof p.onPress === 'function') {
-      var cb = p.onPress;
-      var arg = p.rowId;
-      R.flushSync(function () { cb(arg); });
-      return;
-    }
-    f = f.return;
-    guard++;
-  }
+  responderSystem.handleEvent(target, eventType, nativeEvent);
 }
 
 module.exports = {

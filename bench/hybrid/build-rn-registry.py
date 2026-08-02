@@ -229,6 +229,14 @@ def build_fabric_source(manifest, platform):
     fcore = (REAL / "typed-port-core.ts").read_text()
     fcore = fcore.replace("const supportsMutation = true;", "const supportsMutation = false;")
     fcore = fcore.replace("const supportsPersistence = false;", "const supportsPersistence = true;")
+    # the live-Fabric unit tracks the NEXT persistence contract: children are
+    # passed as plain arrays at clone/completeRoot time (the C++ child-set
+    # bindings are marked for removal). The JS twin inherently drives the old
+    # contract (the npm reconciler predates the flag); both render the same
+    # committed trees (tree-checksum verified in the local persistent gates).
+    fcore = fcore.replace(
+        "const passChildrenWhenCloningPersistedNodes = false;",
+        "const passChildrenWhenCloningPersistedNodes = true;")
     fdiff = "\n".join(
         l for l in (REAL / "diffprops-typed-body.ts").read_text().splitlines()
         if not l.startswith("dpRunWorkload(")
@@ -248,6 +256,7 @@ function fhCreate(props: any, validAttributes: any): any {
         + faliases
         + (REAL / "fabric-host.inc.js").read_text()
         + fcore
+        + (REAL / "responder.inc.js").read_text()
         + (REAL / "fabric-app.inc.js").read_text()
         + fbody
     )
