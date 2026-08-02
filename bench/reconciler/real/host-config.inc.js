@@ -18,6 +18,7 @@ var hostStats = {
   unhides: 0,
   hiddenClones: 0,
   checksum: 0,
+  treeSum: 0,
 };
 var nextInstanceId = 1;
 
@@ -165,6 +166,7 @@ function hcReplaceContainerChildren(container, childSet) {
   hostStats.replaces++;
   container.children = childSet.children;
   mix(13);
+  treeMixContainer(container);
 }
 
 // ---- Suspense visibility ops ----
@@ -191,6 +193,77 @@ function hcUnhideTextInstance(inst, text) {
   mix(20);
   mix(coerceInt(inst.id));
   mix(hashStr(text));
+}
+
+// ---- passChildrenWhenCloningPersistedNodes contract ----
+// children are passed as a plain array at clone/completeRoot time; no
+// child-set object, no per-child appends.
+function hcCloneInstancePassChildren(instance, updatePayload, type, newProps, children) {
+  hostStats.clones++;
+  var inst = {id: nextInstanceId++, type: instance.type, props: newProps, children: children.slice()};
+  mix(25);
+  mix(coerceInt(instance.id));
+  for (var ci = 0; ci < children.length; ci++) {
+    mix(coerceInt(children[ci].id));
+  }
+  if (updatePayload !== null && updatePayload !== undefined) {
+    for (var pi = 0; pi < updatePayload.length; pi += 2) {
+      mix(hashStr(updatePayload[pi]));
+      mix(hashVal(updatePayload[pi + 1]));
+    }
+  }
+  return inst;
+}
+
+function hcCompleteRootPassChildren(container, childArray) {
+  hostStats.replaces++;
+  container.children = childArray.slice();
+  mix(27);
+  for (var ci = 0; ci < childArray.length; ci++) {
+    mix(coerceInt(childArray[ci].id));
+  }
+  treeMixContainer(container);
+}
+
+// ---- committed-tree checksum ----
+// hashes the full committed tree (types, text, props, structure) at every
+// root completion. Contract variants produce different op streams but MUST
+// produce identical committed trees — this is the axis that proves it.
+function hashPropsInto(h, props) {
+  for (var k in props) {
+    if (k === 'children') {
+      continue;
+    }
+    h = (h * 33 + hashStr(k)) | 0;
+    h = (h * 33 + hashVal(props[k])) | 0;
+  }
+  return h;
+}
+
+function treeHashNode(n) {
+  var h = 17;
+  h = (h * 31 + hashStr(n.type)) | 0;
+  if (n.type === '#text') {
+    h = (h * 31 + hashStr(n.text)) | 0;
+    return h;
+  }
+  h = hashPropsInto(h, n.props);
+  var kids = n.children;
+  if (kids !== null && kids !== undefined) {
+    for (var i = 0; i < kids.length; i++) {
+      h = (h * 31 + treeHashNode(kids[i])) | 0;
+    }
+  }
+  return h;
+}
+
+function treeMixContainer(container) {
+  var h = 17;
+  var kids = container.children;
+  for (var i = 0; i < kids.length; i++) {
+    h = (h * 31 + treeHashNode(kids[i])) | 0;
+  }
+  hostStats.treeSum = ((hostStats.treeSum * 31 + h) | 0) >>> 0 | 0;
 }
 
 function hcCloneHiddenInstance(instance, type, props) {
@@ -224,6 +297,7 @@ function hostStatsLine() {
     ' hides=' + String(hostStats.hides) +
     ' unhides=' + String(hostStats.unhides) +
     ' hiddenClones=' + String(hostStats.hiddenClones) +
+    ' tree=' + String(hostStats.treeSum >>> 0) +
     ' checksum=' + String(hostStats.checksum >>> 0)
   );
 }
@@ -248,4 +322,5 @@ function hostStatsReset() {
   hostStats.updates = 0;
   hostStats.textUpdates = 0;
   hostStats.checksum = 0;
+  hostStats.treeSum = 0;
 }

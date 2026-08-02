@@ -97,6 +97,35 @@ function hcCloneInstance(instance, updatePayload, type, newProps, keepChildren) 
   return inst;
 }
 
+// passChildrenWhenCloningPersistedNodes contract: children as plain JS
+// arrays of shadow nodes; the deprecated createChildSet/appendChildToSet
+// bindings are not used on this path.
+function hcCloneInstancePassChildren(instance, updatePayload, type, newProps, children) {
+  var childNodes = mkList();
+  for (var ci = 0; ci < children.length; ci++) {
+    childNodes.push(children[ci].node);
+  }
+  var node = anyNull();
+  if (updatePayload !== null && updatePayload !== undefined) {
+    node = FH.ui.cloneNodeWithNewChildrenAndProps(instance.node, childNodes, updatePayload);
+  } else {
+    node = FH.ui.cloneNodeWithNewChildren(instance.node, childNodes);
+  }
+  var inst = mkObj();
+  inst.node = node;
+  inst.va = instance.va;
+  return inst;
+}
+
+function hcCompleteRootPassChildren(container, childArray) {
+  FH.stats.completeRoots++;
+  var childNodes = mkList();
+  for (var ci = 0; ci < childArray.length; ci++) {
+    childNodes.push(childArray[ci].node);
+  }
+  FH.ui.completeRoot(coerceInt(container.containerTag), childNodes);
+}
+
 function hcCreateContainerChildSet() {
   FH.stats.childSets++;
   return FH.ui.createChildSet();

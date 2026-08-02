@@ -425,6 +425,11 @@ function schedHasTasks(): boolean {
 // ---- host mode (React gates these same paths on its host config) ----
 const supportsMutation = true;
 const supportsPersistence = false;
+// Fabric's next persistence contract: children are passed as an array at
+// clone/completeRoot time (cloneNodeWithNewChildren(node, children)); the
+// child-set object and per-child appends disappear. Flipped by build
+// scripts; committed trees must be identical either way.
+const passChildrenWhenCloningPersistedNodes = false;
 
 function objectIs(x: any, y: any): boolean {
   if (x === y) {
@@ -2958,6 +2963,49 @@ function appendAllChildrenToContainer(childSet: any, workInProgress: FiberNode, 
   }
 }
 
+// pass-children contract: same traversal as the append walks, but the host
+// instances are collected into a plain array instead of being appended
+// one-by-one to a parent/child-set.
+function collectAllChildrenInto(list: any, workInProgress: FiberNode, needsVisibilityToggle: boolean, isHidden: boolean): void {
+  let node = workInProgress.child;
+  while (node !== null) {
+    if (node.tag === HostComponent) {
+      let instance: any = node.stateNode;
+      if (needsVisibilityToggle && isHidden) {
+        instance = hcCloneHiddenInstance(instance, node.type, node.memoizedProps);
+      }
+      list.push(instance);
+    } else if (node.tag === HostText) {
+      let instance2: any = node.stateNode;
+      if (needsVisibilityToggle && isHidden) {
+        instance2 = hcCloneHiddenTextInstance(instance2, node.memoizedProps);
+      }
+      list.push(instance2);
+    } else if (node.tag === OffscreenComponent && node.memoizedState !== null) {
+      const oChild = node.child;
+      if (oChild !== null) {
+        oChild.ret = node;
+      }
+      collectAllChildrenInto(list, node, true, true);
+    } else if (node.child !== null) {
+      node.child.ret = node;
+      node = node.child;
+      continue;
+    }
+    if (node === workInProgress) {
+      return;
+    }
+    while (node.sibling === null) {
+      if (node.ret === null || node.ret === workInProgress) {
+        return;
+      }
+      node = node.ret;
+    }
+    node.sibling.ret = node.ret;
+    node = node.sibling;
+  }
+}
+
 // React: hadNoMutationsEffects — children unchanged iff no mutation-mask
 // effects in the completed children (bailed-out subtrees keep fiber identity).
 function hadNoMutationsEffects(current: FiberNode | null, completedWork: FiberNode): boolean {
@@ -2981,7 +3029,12 @@ function hadNoMutationsEffects(current: FiberNode | null, completedWork: FiberNo
 function updateHostContainer(current: FiberNode | null, workInProgress: FiberNode): void {
   const root: FiberRootNode = workInProgress.stateNode;
   const childrenUnchanged = hadNoMutationsEffects(current, workInProgress);
-  if (!childrenUnchanged) {
+  if (!childrenUnchanged && passChildrenWhenCloningPersistedNodes) {
+    const childArray: any = new G.Array();
+    collectAllChildrenInto(childArray, workInProgress, false, false);
+    root.pendingChildren = childArray;
+    workInProgress.flags |= Update;
+  } else if (!childrenUnchanged) {
     const container: any = root.containerInfo;
     const newChildSet: any = hcCreateContainerChildSet();
     appendAllChildrenToContainer(newChildSet, workInProgress, false, false);
@@ -3045,6 +3098,14 @@ function completeWork(current: FiberNode | null, workInProgress: FiberNode): Fib
           const payloadP: any = oldPropsP !== newProps ? diffHostProps(oldPropsP, newProps, currentInstance) : null;
           if (childrenUnchanged && payloadP === null) {
             workInProgress.stateNode = currentInstance;
+          } else if (!childrenUnchanged && passChildrenWhenCloningPersistedNodes) {
+            // new contract: collect the completed children and pass them at
+            // clone time
+            const childList: any = new G.Array();
+            collectAllChildrenInto(childList, workInProgress, false, false);
+            const newInstanceP: any = hcCloneInstancePassChildren(
+              currentInstance, payloadP, workInProgress.type, newProps, childList);
+            workInProgress.stateNode = newInstanceP;
           } else {
             const newInstance: any = hcCloneInstance(
               currentInstance, payloadP, workInProgress.type, newProps, childrenUnchanged);
@@ -3487,7 +3548,11 @@ function commitMutationEffectsOnFiber(finishedWork: FiberNode, root: FiberRootNo
   }
   if (tag === HostRoot) {
     if (supportsPersistence && (finishedWork.flags & Update) !== NoFlags) {
-      hcReplaceContainerChildren(root.containerInfo, root.pendingChildren);
+      if (passChildrenWhenCloningPersistedNodes) {
+        hcCompleteRootPassChildren(root.containerInfo, root.pendingChildren);
+      } else {
+        hcReplaceContainerChildren(root.containerInfo, root.pendingChildren);
+      }
       finishedWork.flags &= ~Update;
     }
     return;
