@@ -40,6 +40,95 @@ function installFeedApp(RA) {
 
   var ThemeContext = RA.createContext('light');
 
+  // Synchronous thenable: resolution fires callbacks INLINE (not as a
+  // microtask), so lazy/data suspensions resolve deterministically inside
+  // the measured loop on both reconcilers (React accepts any thenable).
+  function makeSyncThenable() {
+    var t = mkObj();
+    t.status = 0;
+    t.value = null;
+    t.callbacks = mkList();
+    t.then = function (onFulfilled, onRejected) {
+      if (t.status === 1) {
+        onFulfilled(t.value);
+      } else {
+        t.callbacks.push(onFulfilled);
+      }
+    };
+    t.resolve = function (v) {
+      if (t.status === 1) {
+        return;
+      }
+      t.status = 1;
+      t.value = v;
+      var cbs = t.callbacks;
+      t.callbacks = mkList();
+      for (var ci = 0; ci < cbs.length; ci++) {
+        cbs[ci](v);
+      }
+    };
+    return t;
+  }
+
+  // suspense data resource for the trends panel
+  var trendsData = mkObj();
+  trendsData.thenable = null;
+  trendsData.value = null;
+  function readTrendsData() {
+    if (trendsData.value !== null) {
+      return trendsData.value;
+    }
+    if (trendsData.thenable === null) {
+      trendsData.thenable = makeSyncThenable();
+    }
+    throw trendsData.thenable;
+  }
+  exposed.invalidateTrendsData = function () {
+    trendsData.value = null;
+    trendsData.thenable = null;
+  };
+  exposed.resolveTrendsData = function (v) {
+    trendsData.value = v;
+    if (trendsData.thenable !== null) {
+      trendsData.thenable.resolve(v);
+    }
+  };
+
+  function TrendsBody(props) {
+    var data = readTrendsData();
+    fxMix(41);
+    RA.useEffect(function () {
+      fxMix(42);
+      return function () { fxMix(43); };
+    }, mkList());
+    return h('view-trends', {id: -3, background: '#eef'},
+      h('text-trend', {id: -3, fontSize: 12}, 'trends: ' + data + ' v' + props.version));
+  }
+
+  var trendsLoadThenable = makeSyncThenable();
+  exposed.resolveTrendsModule = function () {
+    var mod = mkObj();
+    mod.default = TrendsBody;
+    trendsLoadThenable.resolve(mod);
+  };
+  var LazyTrends = RA.lazy(function () {
+    return trendsLoadThenable;
+  });
+
+  var FancyBanner = RA.forwardRef(function (props, ref) {
+    fxMix(51);
+    return h('view-banner', {id: -5, ref: ref, height: 20, label: props.label}, props.label);
+  });
+
+  function statsCompare(prev, next) {
+    return prev.version === next.version; // deliberately ignores `noise`
+  }
+  function StatsPanel(props) {
+    fxMix(61);
+    return h('view-stats', {id: -6, height: 24}, 'stats v' + props.version + ' n' + props.noise);
+  }
+  var MemoStatsPanel = RA.memo(StatsPanel, statsCompare);
+
   function makePost(id, author, ts, content, likes, liked) {
     return {id: id, author: author, ts: ts, content: content, likes: likes, liked: liked};
   }
@@ -120,9 +209,13 @@ function installFeedApp(RA) {
     var pc = RA.useState(0);
     var passiveEcho = pc[0];
     var setPassiveEcho = pc[1];
+    var st2 = RA.useState(false);
+    var showTrends = st2[0];
+    var setShowTrends = st2[1];
     exposed.setPosts = setPosts;
     exposed.setVersion = setVersion;
     exposed.setTheme = setTheme;
+    exposed.setShowTrends = setShowTrends;
 
     var onToggle = RA.useCallback(function (id) {
       setPosts(function (ps) {
@@ -177,6 +270,20 @@ function installFeedApp(RA) {
       fxMix(inst === null ? -77 : 77);
     }, mkList());
 
+    var depsI = mkList();
+    depsI.push(version);
+    RA.useInsertionEffect(function () {
+      fxMix(71);
+      return function () { fxMix(72); };
+    }, depsI);
+
+    var bannerRef = RA.useRef(null);
+    var depsB = mkList();
+    RA.useEffect(function () {
+      fxMix(bannerRef.current !== null ? 80 + coerceInt(bannerRef.current.id) : -80);
+      return function () { fxMix(-81); };
+    }, depsB);
+
     var children = mkList();
     children.push(h(MemoHeader, {key: 1000000, title: 'Feed v' + version}));
     var totalLikes = anyVal(0);
@@ -192,6 +299,14 @@ function installFeedApp(RA) {
         liked: post.liked,
         onToggle: onToggle,
       }));
+    }
+    children.push(h(FancyBanner, {key: 1000003, label: 'Feed banner v' + version, ref: bannerRef}));
+    children.push(h(MemoStatsPanel, {key: 1000004, version: version, noise: totalLikes}));
+    if (showTrends) {
+      children.push(h(RA.Suspense, {
+        key: 1000002,
+        fallback: h('view-loading', {id: -4, height: 30}, 'loading trends…'),
+      }, h(LazyTrends, {version: version})));
     }
     children.push(h(MemoFooter, {
       key: 1000001,
@@ -241,6 +356,43 @@ function runFeedDriver(app, flushInteraction, flushPassive, log) {
   var nextPostId = anyVal(POSTS + 1);
 
   function interact(tick) {
+    // deterministic Suspense lifecycle (in the measured window; WARMUP=50):
+    if (tick === 60) {
+      // mount-suspend: lazy module pending -> fallback; resolve module ->
+      // retry -> data pending -> fallback; resolve data -> content
+      flushInteraction(function () {
+        exposed.setShowTrends(function () { return true; });
+      });
+      if (flushPassive !== null && flushPassive !== undefined) { flushPassive(); }
+      exposed.resolveTrendsModule();
+      flushInteraction(function () {}); // flush the scheduled retry
+      if (flushPassive !== null && flushPassive !== undefined) { flushPassive(); }
+      exposed.resolveTrendsData('hot-items-1');
+      flushInteraction(function () {});
+      if (flushPassive !== null && flushPassive !== undefined) { flushPassive(); }
+      return;
+    }
+    if (tick === 90 || tick === 800) {
+      // update-suspend: committed primary gets HIDDEN (legacy semantics),
+      // fallback shows; resolve -> retry -> unhide
+      exposed.invalidateTrendsData();
+      flushInteraction(function () {
+        exposed.setVersion(function (v) { return v + 1; });
+      });
+      if (flushPassive !== null && flushPassive !== undefined) { flushPassive(); }
+      exposed.resolveTrendsData(tick === 90 ? 'hot-items-2' : 'hot-items-3');
+      flushInteraction(function () {}); // flush the scheduled retry
+      if (flushPassive !== null && flushPassive !== undefined) { flushPassive(); }
+      return;
+    }
+    if (tick === 1500) {
+      // unmount the whole suspense subtree (deletion effects incl. passive)
+      flushInteraction(function () {
+        exposed.setShowTrends(function () { return false; });
+      });
+      if (flushPassive !== null && flushPassive !== undefined) { flushPassive(); }
+      return;
+    }
     var r = rand(100);
     if (r < 60) {
       var id = ids[rand(ids.length)];

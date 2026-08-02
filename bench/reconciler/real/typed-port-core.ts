@@ -12,22 +12,36 @@ const FunctionComponent = 0;
 const HostRoot = 3;
 const HostComponent = 5;
 const HostText = 6;
+const Fragment = 7;
 const ContextProvider = 10;
+const ForwardRef = 11;
+const SuspenseComponent = 13;
+const MemoComponent = 14;
 const SimpleMemoComponent = 15;
+const LazyComponent = 16;
+const OffscreenComponent = 22;
 
 // ---- flags ----
 const NoFlags = 0;
 const Placement = 2;
 const Update = 4;
 const ChildDeletion = 16;
+const DidCapture = 128;
 const Ref = 512;
 const Passive = 2048;
-const MutationMask = Placement | Update | ChildDeletion;
-const LayoutMask = Update | Ref;
+const Visibility = 8192;
+const Incomplete = 32768;
+const ShouldCapture = 65536;
+const ForceUpdateForLegacySuspense = 131072;
+const HostEffectMask = 32767;
+const MutationMask = Placement | Update | ChildDeletion | Ref | Visibility;
+const LayoutMask = Update | Ref | Visibility;
 const PassiveMask = Passive | ChildDeletion;
+const LifecycleEffectMask = Passive | Update | Ref;
 
 // ---- hook effect tags (HookFlags) ----
 const HookHasEffect = 1;
+const HookInsertion = 2;
 const HookLayout = 4;
 const HookPassive = 8;
 
@@ -87,16 +101,71 @@ class El {
 class MemoT {
   $$memo: boolean;
   render: any;
+  compare: any;
 
-  constructor(render: any) {
+  constructor(render: any, compare: any) {
     this.$$memo = true;
     this.render = render;
+    this.compare = compare;
   }
 }
 
-function memoImpl(render: any): any {
-  return new MemoT(render);
+function memoImpl(render: any, compare: any): any {
+  return new MemoT(render, compare === undefined ? null : compare);
 }
+
+function forwardRefImpl(render: any): any {
+  const t: any = mkObj();
+  t.$$forwardRef = true;
+  t.render = render;
+  return t;
+}
+
+// React.lazy: payload statuses -1 uninitialized / 0 pending / 1 resolved /
+// 2 rejected; the initializer throws the thenable while pending.
+function lazyInitializer(payload: any): any {
+  if (payload._status === -1) {
+    const ctor: any = payload._result;
+    const thenable: any = ctor();
+    thenable.then(
+      function (moduleObject: any): void {
+        if (payload._status === 0 || payload._status === -1) {
+          payload._status = 1;
+          payload._result = moduleObject;
+        }
+      },
+      function (error: any): void {
+        if (payload._status === 0 || payload._status === -1) {
+          payload._status = 2;
+          payload._result = error;
+        }
+      }
+    );
+    if (payload._status === -1) {
+      payload._status = 0;
+      payload._result = thenable;
+    }
+  }
+  if (payload._status === 1) {
+    const moduleObject2: any = payload._result;
+    return moduleObject2.default;
+  }
+  throw payload._result;
+}
+
+function lazyImpl(ctor: any): any {
+  const payload: any = mkObj();
+  payload._status = -1;
+  payload._result = ctor;
+  const t: any = mkObj();
+  t.$$lazy = true;
+  t._payload = payload;
+  t._init = lazyInitializer;
+  return t;
+}
+
+const SuspenseType: any = mkObj();
+SuspenseType.$$suspense = true;
 
 function createElementImpl(type: any, config: any, c1: any, c2: any, c3: any): any {
   const props: any = new G.Object();
@@ -237,15 +306,40 @@ function createFiberFromElement(element: any, lanes: number): FiberNode {
   if (typeof type === 'string') {
     tag = HostComponent;
   } else if (type !== null && typeof type === 'object' && type.$$memo === true) {
-    tag = SimpleMemoComponent;
-    resolvedType = type.render;
+    // React: SimpleMemoComponent only for a plain function with the default
+    // comparer; a custom compare gets the MemoComponent wrapper fiber.
+    if (type.compare === null && typeof type.render === 'function') {
+      tag = SimpleMemoComponent;
+      resolvedType = type.render;
+    } else {
+      tag = MemoComponent;
+    }
   } else if (type !== null && typeof type === 'object' && type.$$provider === true) {
     tag = ContextProvider;
+  } else if (type !== null && typeof type === 'object' && type.$$forwardRef === true) {
+    tag = ForwardRef;
+  } else if (type !== null && typeof type === 'object' && type.$$lazy === true) {
+    tag = LazyComponent;
+    resolvedType = null;
+  } else if (type !== null && typeof type === 'object' && type.$$suspense === true) {
+    tag = SuspenseComponent;
   }
   const fiber = new FiberNode(tag, element.props, element.key);
   fiber.elementType = type;
   fiber.type = resolvedType;
   fiber.ref = element.ref;
+  fiber.lanes = lanes;
+  return fiber;
+}
+
+function createFiberFromFragmentChildren(children: any, lanes: number): FiberNode {
+  const fiber = new FiberNode(Fragment, children, null);
+  fiber.lanes = lanes;
+  return fiber;
+}
+
+function createFiberFromOffscreen(pendingProps: any, lanes: number): FiberNode {
+  const fiber = new FiberNode(OffscreenComponent, pendingProps, null);
   fiber.lanes = lanes;
   return fiber;
 }
@@ -807,18 +901,47 @@ function useLayoutEffectImpl(create: any, deps: any): void {
   }
 }
 
-function renderWithHooks(current: FiberNode | null, workInProgress: FiberNode, Component: any, props: any): any {
+function useInsertionEffectImpl(create: any, deps: any): void {
+  if (isMountPhase) {
+    mountEffectImpl(Update, HookInsertion, create, deps);
+  } else {
+    updateEffectImpl(Update, HookInsertion, create, deps);
+  }
+}
+
+function renderWithHooks(current: FiberNode | null, workInProgress: FiberNode, Component: any, props: any, secondArg: any): any {
   currentlyRenderingFiber = workInProgress;
   workInProgress.memoizedState = null;
   workInProgress.updateQueue = null;
   isMountPhase = current === null || current.memoizedState === null;
   currentHook = null;
   workInProgressHook = null;
-  const children: any = Component(props);
+  const children: any = Component(props, secondArg);
   currentlyRenderingFiber = null;
   currentHook = null;
   workInProgressHook = null;
   return children;
+}
+
+// render threw: reset hooks module state (React: resetHooksAfterThrow) and,
+// in legacy mode, restore the source fiber's pre-render hook state so the
+// incomplete fiber can be committed as-is (resetSuspendedComponent).
+function resetHooksAfterThrow(sourceFiber: FiberNode): void {
+  currentlyRenderingFiber = null;
+  currentHook = null;
+  workInProgressHook = null;
+  const tag = sourceFiber.tag;
+  if (tag === FunctionComponent || tag === ForwardRef || tag === SimpleMemoComponent) {
+    const currentSource = sourceFiber.alternate;
+    if (currentSource !== null) {
+      sourceFiber.updateQueue = currentSource.updateQueue;
+      sourceFiber.memoizedState = currentSource.memoizedState;
+      sourceFiber.lanes = currentSource.lanes;
+    } else {
+      sourceFiber.updateQueue = null;
+      sourceFiber.memoizedState = null;
+    }
+  }
 }
 
 // ---- child reconciliation (ReactChildFiber, mutation mode) ----
@@ -1137,13 +1260,90 @@ function bailoutOnAlreadyFinishedWork(current: FiberNode | null, workInProgress:
 
 function updateFunctionComponent(current: FiberNode | null, workInProgress: FiberNode, Component: any, nextProps: any, renderLanes: number): FiberNode | null {
   prepareToReadContext(workInProgress, renderLanes);
-  const nextChildren: any = renderWithHooks(current, workInProgress, Component, nextProps);
+  const nextChildren: any = renderWithHooks(current, workInProgress, Component, nextProps, undefined);
   if (current !== null && !didReceiveUpdate) {
     // bailoutHooks
     current.lanes = current.lanes & ~renderLanes;
     return bailoutOnAlreadyFinishedWork(current, workInProgress, renderLanes);
   }
   reconcileChildren(current, workInProgress, nextChildren, renderLanes);
+  return workInProgress.child;
+}
+
+function updateForwardRef(current: FiberNode | null, workInProgress: FiberNode, Component: any, nextProps: any, renderLanes: number): FiberNode | null {
+  const render: any = Component.render;
+  const ref: any = workInProgress.ref;
+  prepareToReadContext(workInProgress, renderLanes);
+  const nextChildren: any = renderWithHooks(current, workInProgress, render, nextProps, ref);
+  if (current !== null && !didReceiveUpdate) {
+    current.lanes = current.lanes & ~renderLanes;
+    return bailoutOnAlreadyFinishedWork(current, workInProgress, renderLanes);
+  }
+  reconcileChildren(current, workInProgress, nextChildren, renderLanes);
+  return workInProgress.child;
+}
+
+function updateMemoComponent(current: FiberNode | null, workInProgress: FiberNode, Component: any, nextProps: any, renderLanes: number): FiberNode | null {
+  if (current === null) {
+    const innerEl: any = new El(Component.render, null, workInProgress.ref, nextProps);
+    const child = createFiberFromElement(innerEl, renderLanes);
+    child.ref = workInProgress.ref;
+    child.ret = workInProgress;
+    workInProgress.child = child;
+    return child;
+  }
+  const currentChild: FiberNode = current.child !== null ? current.child : workInProgress;
+  const hasScheduledUpdate = (current.lanes & renderLanes) !== NoLanes;
+  if (!hasScheduledUpdate) {
+    const prevProps: any = currentChild.memoizedProps;
+    const compare: any = Component.compare !== null ? Component.compare : shallowEqual;
+    if (compare(prevProps, nextProps) && current.ref === workInProgress.ref) {
+      return bailoutOnAlreadyFinishedWork(current, workInProgress, renderLanes);
+    }
+  }
+  const newChild = createWorkInProgress(currentChild, nextProps);
+  newChild.ref = workInProgress.ref;
+  newChild.ret = workInProgress;
+  workInProgress.child = newChild;
+  return newChild;
+}
+
+// React (legacy mode): a lazy component only MOUNTS here if it suspended in
+// an inconsistent state — treat it like a new mount: disconnect the
+// alternates and schedule a Placement effect.
+function resetSuspendedCurrentOnMountInLegacyMode(current: FiberNode | null, workInProgress: FiberNode): void {
+  if (current !== null) {
+    current.alternate = null;
+    workInProgress.alternate = null;
+    workInProgress.flags |= Placement;
+  }
+}
+
+function mountLazyComponent(current: FiberNode | null, workInProgress: FiberNode, renderLanes: number): FiberNode | null {
+  resetSuspendedCurrentOnMountInLegacyMode(current, workInProgress);
+  const props: any = workInProgress.pendingProps;
+  const lazyComponent: any = workInProgress.elementType;
+  const payload: any = lazyComponent._payload;
+  const init: any = lazyComponent._init;
+  const Component: any = init(payload); // throws the thenable while pending
+  workInProgress.type = Component;
+  if (typeof Component === 'function') {
+    workInProgress.tag = FunctionComponent;
+    return updateFunctionComponent(null, workInProgress, Component, props, renderLanes);
+  }
+  if (Component !== null && typeof Component === 'object' && Component.$$forwardRef === true) {
+    workInProgress.tag = ForwardRef;
+    return updateForwardRef(null, workInProgress, Component, props, renderLanes);
+  }
+  if (Component !== null && typeof Component === 'object' && Component.$$memo === true) {
+    workInProgress.tag = MemoComponent;
+    return updateMemoComponent(null, workInProgress, Component, props, renderLanes);
+  }
+  throw new Error('lazy: unsupported resolved component type');
+}
+
+function updateFragment(current: FiberNode | null, workInProgress: FiberNode, renderLanes: number): FiberNode | null {
+  reconcileChildren(current, workInProgress, workInProgress.pendingProps, renderLanes);
   return workInProgress.child;
 }
 
@@ -1165,6 +1365,161 @@ function updateContextProvider(current: FiberNode | null, workInProgress: FiberN
     }
   }
   reconcileChildren(current, workInProgress, newProps.children, renderLanes);
+  return workInProgress.child;
+}
+
+// ---- Suspense (ReactFiberBeginWork, legacy sync mode only) ----
+const SUSPENDED_MARKER: any = mkObj();
+SUSPENDED_MARKER.dehydrated = null;
+SUSPENDED_MARKER.retryLane = SyncLane;
+
+function mountSuspenseOffscreenState(): any {
+  const s: any = mkObj();
+  s.baseLanes = NoLanes;
+  return s;
+}
+
+function mountSuspensePrimaryChildren(workInProgress: FiberNode, primaryChildren: any, renderLanes: number): FiberNode {
+  const primaryChildProps: any = mkObj();
+  primaryChildProps.mode = 'visible';
+  primaryChildProps.children = primaryChildren;
+  const primaryChildFragment = createFiberFromOffscreen(primaryChildProps, renderLanes);
+  primaryChildFragment.ret = workInProgress;
+  workInProgress.child = primaryChildFragment;
+  return primaryChildFragment;
+}
+
+function mountSuspenseFallbackChildren(workInProgress: FiberNode, primaryChildren: any, fallbackChildren: any, renderLanes: number): FiberNode {
+  const progressedPrimaryFragment: FiberNode | null = workInProgress.child;
+  const primaryChildProps: any = mkObj();
+  primaryChildProps.mode = 'hidden';
+  primaryChildProps.children = primaryChildren;
+  let primaryChildFragment: FiberNode;
+  // legacy mode: reuse the progressed primary fragment from the first pass
+  if (progressedPrimaryFragment !== null) {
+    primaryChildFragment = progressedPrimaryFragment;
+    primaryChildFragment.childLanes = NoLanes;
+    primaryChildFragment.pendingProps = primaryChildProps;
+  } else {
+    primaryChildFragment = createFiberFromOffscreen(primaryChildProps, renderLanes);
+  }
+  const fallbackChildFragment = createFiberFromFragmentChildren(fallbackChildren, renderLanes);
+  primaryChildFragment.ret = workInProgress;
+  fallbackChildFragment.ret = workInProgress;
+  primaryChildFragment.sibling = fallbackChildFragment;
+  workInProgress.child = primaryChildFragment;
+  return fallbackChildFragment;
+}
+
+function updateSuspensePrimaryChildren(current: FiberNode, workInProgress: FiberNode, primaryChildren: any, renderLanes: number): FiberNode {
+  const currentPrimaryChildFragment: FiberNode = current.child !== null ? current.child : workInProgress;
+  const currentFallbackChildFragment: FiberNode | null = currentPrimaryChildFragment.sibling;
+  const primaryChildProps: any = mkObj();
+  primaryChildProps.mode = 'visible';
+  primaryChildProps.children = primaryChildren;
+  const primaryChildFragment = createWorkInProgress(currentPrimaryChildFragment, primaryChildProps);
+  // legacy mode forces the primary tree to re-render
+  primaryChildFragment.lanes = renderLanes;
+  primaryChildFragment.ret = workInProgress;
+  primaryChildFragment.sibling = null;
+  if (currentFallbackChildFragment !== null) {
+    let deletions: any = workInProgress.deletions;
+    if (deletions === null) {
+      deletions = new G.Array();
+      deletions.push(currentFallbackChildFragment);
+      workInProgress.deletions = deletions;
+      workInProgress.flags |= ChildDeletion;
+    } else {
+      deletions.push(currentFallbackChildFragment);
+    }
+  }
+  workInProgress.child = primaryChildFragment;
+  return primaryChildFragment;
+}
+
+function updateSuspenseFallbackChildren(current: FiberNode, workInProgress: FiberNode, primaryChildren: any, fallbackChildren: any, renderLanes: number): FiberNode {
+  const currentPrimaryChildFragment: FiberNode = current.child !== null ? current.child : workInProgress;
+  const currentFallbackChildFragment: FiberNode | null = currentPrimaryChildFragment.sibling;
+  const primaryChildProps: any = mkObj();
+  primaryChildProps.mode = 'hidden';
+  primaryChildProps.children = primaryChildren;
+  let primaryChildFragment: FiberNode;
+  // legacy second pass: the primary fragment already progressed in the first
+  // pass — reuse it and drop the deletion that pass recorded.
+  if (workInProgress.child !== currentPrimaryChildFragment && workInProgress.child !== null) {
+    primaryChildFragment = workInProgress.child;
+    primaryChildFragment.childLanes = NoLanes;
+    primaryChildFragment.pendingProps = primaryChildProps;
+    workInProgress.deletions = null;
+  } else {
+    primaryChildFragment = createWorkInProgress(currentPrimaryChildFragment, primaryChildProps);
+    primaryChildFragment.subtreeFlags = NoFlags;
+  }
+  let fallbackChildFragment: FiberNode;
+  if (currentFallbackChildFragment !== null) {
+    fallbackChildFragment = createWorkInProgress(currentFallbackChildFragment, fallbackChildren);
+  } else {
+    fallbackChildFragment = createFiberFromFragmentChildren(fallbackChildren, renderLanes);
+    fallbackChildFragment.flags |= Placement;
+  }
+  fallbackChildFragment.ret = workInProgress;
+  primaryChildFragment.ret = workInProgress;
+  primaryChildFragment.sibling = fallbackChildFragment;
+  workInProgress.child = primaryChildFragment;
+  return fallbackChildFragment;
+}
+
+function updateSuspenseComponent(current: FiberNode | null, workInProgress: FiberNode, renderLanes: number): FiberNode | null {
+  const nextProps: any = workInProgress.pendingProps;
+  let showFallback = false;
+  const didSuspend = (workInProgress.flags & DidCapture) !== NoFlags;
+  if (didSuspend) {
+    showFallback = true;
+    workInProgress.flags &= ~DidCapture;
+  }
+  if (current === null) {
+    const nextPrimaryChildren: any = nextProps.children;
+    const nextFallbackChildren: any = nextProps.fallback;
+    if (showFallback) {
+      const fallbackFragment = mountSuspenseFallbackChildren(workInProgress, nextPrimaryChildren, nextFallbackChildren, renderLanes);
+      const primaryChildFragment = workInProgress.child;
+      if (primaryChildFragment !== null) {
+        primaryChildFragment.memoizedState = mountSuspenseOffscreenState();
+      }
+      workInProgress.memoizedState = SUSPENDED_MARKER;
+      return fallbackFragment;
+    }
+    return mountSuspensePrimaryChildren(workInProgress, nextPrimaryChildren, renderLanes);
+  }
+  if (showFallback) {
+    const fallbackChildFragment = updateSuspenseFallbackChildren(current, workInProgress, nextProps.children, nextProps.fallback, renderLanes);
+    const primaryChildFragment2 = workInProgress.child;
+    const prevOffscreenState: any = current.child !== null ? current.child.memoizedState : null;
+    if (primaryChildFragment2 !== null) {
+      primaryChildFragment2.memoizedState =
+        prevOffscreenState === null ? mountSuspenseOffscreenState() : prevOffscreenState;
+      primaryChildFragment2.childLanes = current.childLanes & ~renderLanes;
+    }
+    workInProgress.memoizedState = SUSPENDED_MARKER;
+    return fallbackChildFragment;
+  }
+  const primaryChildFragment3 = updateSuspensePrimaryChildren(current, workInProgress, nextProps.children, renderLanes);
+  workInProgress.memoizedState = null;
+  return primaryChildFragment3;
+}
+
+function updateOffscreenComponent(current: FiberNode | null, workInProgress: FiberNode, renderLanes: number): FiberNode | null {
+  const nextProps: any = workInProgress.pendingProps;
+  const nextChildren: any = nextProps.children;
+  if (nextProps.mode === 'hidden') {
+    // legacy mode: no deferral — render children hidden
+    const nextState: any = mkObj();
+    nextState.baseLanes = NoLanes;
+    workInProgress.memoizedState = nextState;
+  } else {
+    workInProgress.memoizedState = null;
+  }
+  reconcileChildren(current, workInProgress, nextChildren, renderLanes);
   return workInProgress.child;
 }
 
@@ -1211,7 +1566,8 @@ function beginWork(current: FiberNode | null, workInProgress: FiberNode, renderL
     if (oldProps !== newProps) {
       didReceiveUpdate = true;
     } else {
-      if ((current.lanes & renderLanes) === NoLanes) {
+      if ((current.lanes & renderLanes) === NoLanes &&
+          (workInProgress.flags & DidCapture) === NoFlags) {
         didReceiveUpdate = false;
         // React: attemptEarlyBailoutIfNoScheduledUpdate re-pushes stack
         // frames for stackful fiber types before bailing out.
@@ -1247,15 +1603,120 @@ function beginWork(current: FiberNode | null, workInProgress: FiberNode, renderL
   if (tag === ContextProvider) {
     return updateContextProvider(current, workInProgress, renderLanes);
   }
+  if (tag === ForwardRef) {
+    return updateForwardRef(current, workInProgress, workInProgress.type, workInProgress.pendingProps, renderLanes);
+  }
+  if (tag === MemoComponent) {
+    return updateMemoComponent(current, workInProgress, workInProgress.elementType, workInProgress.pendingProps, renderLanes);
+  }
+  if (tag === LazyComponent) {
+    return mountLazyComponent(current, workInProgress, renderLanes);
+  }
+  if (tag === Fragment) {
+    return updateFragment(current, workInProgress, renderLanes);
+  }
+  if (tag === SuspenseComponent) {
+    return updateSuspenseComponent(current, workInProgress, renderLanes);
+  }
+  if (tag === OffscreenComponent) {
+    return updateOffscreenComponent(current, workInProgress, renderLanes);
+  }
   throw new Error('unknown tag ' + String(tag));
 }
 
+// ---- throw handling (ReactFiberThrow, legacy sync mode) ----
+function shouldCaptureSuspense(fiber: FiberNode): boolean {
+  return fiber.memoizedState === null;
+}
+
+function getNearestSuspenseBoundaryToCapture(returnFiber: FiberNode | null): FiberNode | null {
+  let node = returnFiber;
+  while (node !== null) {
+    if (node.tag === SuspenseComponent && shouldCaptureSuspense(node)) {
+      return node;
+    }
+    node = node.ret;
+  }
+  return null;
+}
+
+function attachRetryListener(suspenseBoundary: FiberNode, wakeable: any): void {
+  let wakeables: any = suspenseBoundary.updateQueue;
+  if (wakeables === null) {
+    wakeables = new G.Set();
+    wakeables.add(wakeable);
+    suspenseBoundary.updateQueue = wakeables;
+  } else {
+    wakeables.add(wakeable);
+  }
+}
+
+function throwException(returnFiber: FiberNode | null, sourceFiber: FiberNode, value: any): void {
+  sourceFiber.flags |= Incomplete;
+  if (value !== null && typeof value === 'object' && typeof value.then === 'function') {
+    const wakeable: any = value;
+    resetHooksAfterThrow(sourceFiber);
+    const suspenseBoundary = getNearestSuspenseBoundaryToCapture(returnFiber);
+    if (suspenseBoundary !== null) {
+      // legacy (NoMode) capture: markSuspenseBoundaryShouldCapture
+      if (suspenseBoundary === returnFiber) {
+        suspenseBoundary.flags |= ShouldCapture;
+      } else {
+        suspenseBoundary.flags |= DidCapture;
+        sourceFiber.flags |= ForceUpdateForLegacySuspense;
+        // commit the incomplete fiber as-is
+        sourceFiber.flags &= ~(LifecycleEffectMask | Incomplete);
+        sourceFiber.lanes |= SyncLane;
+      }
+      attachRetryListener(suspenseBoundary, wakeable);
+      return;
+    }
+    throw new Error('a component suspended with no Suspense boundary above it');
+  }
+  // no error boundaries in this port
+  throw value;
+}
+
+function unwindWork(current: FiberNode | null, workInProgress: FiberNode): FiberNode | null {
+  const tag = workInProgress.tag;
+  if (tag === ContextProvider) {
+    popProvider(workInProgress.type._context, workInProgress);
+    return null;
+  }
+  if (tag === SuspenseComponent) {
+    const flags = workInProgress.flags;
+    if ((flags & ShouldCapture) !== NoFlags) {
+      workInProgress.flags = (flags & ~ShouldCapture) | DidCapture;
+      return workInProgress;
+    }
+    return null;
+  }
+  return null;
+}
+
 // ---- complete work ----
-function appendAllChildren(parent: any, workInProgress: FiberNode): void {
+function appendAllChildren(parent: any, workInProgress: FiberNode, needsVisibilityToggle: boolean, isHidden: boolean): void {
   let node = workInProgress.child;
   while (node !== null) {
-    if (node.tag === HostComponent || node.tag === HostText) {
-      hcAppendChild(parent, node.stateNode);
+    if (node.tag === HostComponent) {
+      let instance: any = node.stateNode;
+      if (needsVisibilityToggle && isHidden) {
+        instance = hcCloneHiddenInstance(instance, node.type, node.memoizedProps);
+      }
+      hcAppendChild(parent, instance);
+    } else if (node.tag === HostText) {
+      let instance2: any = node.stateNode;
+      if (needsVisibilityToggle && isHidden) {
+        instance2 = hcCloneHiddenTextInstance(instance2, node.memoizedProps);
+      }
+      hcAppendChild(parent, instance2);
+    } else if (supportsPersistence && node.tag === OffscreenComponent && node.memoizedState !== null) {
+      // hidden offscreen subtree (persistent mode): append hidden clones
+      const oChild = node.child;
+      if (oChild !== null) {
+        oChild.ret = node;
+      }
+      appendAllChildren(parent, node, true, true);
     } else if (node.child !== null) {
       node.child.ret = node;
       node = node.child;
@@ -1275,11 +1736,27 @@ function appendAllChildren(parent: any, workInProgress: FiberNode): void {
   }
 }
 
-function appendAllChildrenToContainer(childSet: any, workInProgress: FiberNode): void {
+function appendAllChildrenToContainer(childSet: any, workInProgress: FiberNode, needsVisibilityToggle: boolean, isHidden: boolean): void {
   let node = workInProgress.child;
   while (node !== null) {
-    if (node.tag === HostComponent || node.tag === HostText) {
-      hcAppendChildToContainerChildSet(childSet, node.stateNode);
+    if (node.tag === HostComponent) {
+      let instance: any = node.stateNode;
+      if (needsVisibilityToggle && isHidden) {
+        instance = hcCloneHiddenInstance(instance, node.type, node.memoizedProps);
+      }
+      hcAppendChildToContainerChildSet(childSet, instance);
+    } else if (node.tag === HostText) {
+      let instance2: any = node.stateNode;
+      if (needsVisibilityToggle && isHidden) {
+        instance2 = hcCloneHiddenTextInstance(instance2, node.memoizedProps);
+      }
+      hcAppendChildToContainerChildSet(childSet, instance2);
+    } else if (node.tag === OffscreenComponent && node.memoizedState !== null) {
+      const oChild = node.child;
+      if (oChild !== null) {
+        oChild.ret = node;
+      }
+      appendAllChildrenToContainer(childSet, node, true, true);
     } else if (node.child !== null) {
       node.child.ret = node;
       node = node.child;
@@ -1325,7 +1802,7 @@ function updateHostContainer(current: FiberNode | null, workInProgress: FiberNod
   if (!childrenUnchanged) {
     const container: any = root.containerInfo;
     const newChildSet: any = hcCreateContainerChildSet();
-    appendAllChildrenToContainer(newChildSet, workInProgress);
+    appendAllChildrenToContainer(newChildSet, workInProgress, false, false);
     root.pendingChildren = newChildSet;
     workInProgress.flags |= Update;
     hcFinalizeContainerChildren(container, newChildSet);
@@ -1361,7 +1838,7 @@ function bubbleProperties(completedWork: FiberNode): void {
   completedWork.childLanes = newChildLanes;
 }
 
-function completeWork(current: FiberNode | null, workInProgress: FiberNode): void {
+function completeWork(current: FiberNode | null, workInProgress: FiberNode): FiberNode | null {
   const newProps: any = workInProgress.pendingProps;
   const tag = workInProgress.tag;
   if (tag === HostComponent) {
@@ -1393,18 +1870,18 @@ function completeWork(current: FiberNode | null, workInProgress: FiberNode): voi
             if (childrenUnchanged) {
               workInProgress.flags |= Update;
             } else {
-              appendAllChildren(newInstance, workInProgress);
+              appendAllChildren(newInstance, workInProgress, false, false);
             }
           }
         }
       }
     } else {
       const instance: any = hcCreateInstance(workInProgress.type, newProps, workInProgress);
-      appendAllChildren(instance, workInProgress);
+      appendAllChildren(instance, workInProgress, false, false);
       workInProgress.stateNode = instance;
     }
     bubbleProperties(workInProgress);
-    return;
+    return null;
   }
   if (tag === HostText) {
     if (current !== null && workInProgress.stateNode !== null) {
@@ -1425,21 +1902,60 @@ function completeWork(current: FiberNode | null, workInProgress: FiberNode): voi
       workInProgress.stateNode = hcCreateTextInstance(newProps, workInProgress);
     }
     bubbleProperties(workInProgress);
-    return;
+    return null;
   }
   if (tag === HostRoot) {
     if (supportsPersistence) {
       updateHostContainer(current, workInProgress);
     }
     bubbleProperties(workInProgress);
-    return;
+    return null;
   }
   if (tag === ContextProvider) {
     popProvider(workInProgress.type._context, workInProgress);
     bubbleProperties(workInProgress);
-    return;
+    return null;
+  }
+  if (tag === SuspenseComponent) {
+    const nextState: any = workInProgress.memoizedState;
+    if ((workInProgress.flags & DidCapture) !== NoFlags) {
+      // legacy: the boundary captured mid-complete — re-render it to show
+      // the fallback. Don't bubble; don't reset the effect list.
+      workInProgress.lanes = SyncLane;
+      return workInProgress;
+    }
+    const nextDidTimeout = nextState !== null;
+    const prevDidTimeout = current !== null && current.memoizedState !== null;
+    if (nextDidTimeout !== prevDidTimeout) {
+      if (nextDidTimeout) {
+        const offscreenFiber = workInProgress.child;
+        if (offscreenFiber !== null) {
+          offscreenFiber.flags |= Visibility;
+        }
+      }
+    }
+    if (workInProgress.updateQueue !== null) {
+      // wakeables pending: commit attaches retry listeners
+      workInProgress.flags |= Update;
+    }
+    bubbleProperties(workInProgress);
+    return null;
+  }
+  if (tag === OffscreenComponent) {
+    const nextStateO: any = workInProgress.memoizedState;
+    const nextIsHidden = nextStateO !== null;
+    if (current !== null) {
+      const prevIsHidden = current.memoizedState !== null;
+      if (prevIsHidden !== nextIsHidden) {
+        workInProgress.flags |= Visibility;
+      }
+    }
+    // legacy mode always bubbles
+    bubbleProperties(workInProgress);
+    return null;
   }
   bubbleProperties(workInProgress);
+  return null;
 }
 
 // ---- commit (mutation phase) ----
@@ -1592,7 +2108,9 @@ function commitDeletionHookEffects(deletedFiber: FiberNode): void {
       do {
         const destroy: any = effect.destroy;
         if (destroy !== undefined && destroy !== null) {
-          if ((effect.tag & HookLayout) !== NoFlags) {
+          if ((effect.tag & HookInsertion) !== NoFlags) {
+            destroy();
+          } else if ((effect.tag & HookLayout) !== NoFlags) {
             destroy();
           }
         }
@@ -1626,7 +2144,7 @@ function commitDeletionEffectsOnFiber(deletedFiber: FiberNode, hostParent: any):
     }
     return;
   }
-  if (tag === FunctionComponent || tag === SimpleMemoComponent) {
+  if (tag === FunctionComponent || tag === SimpleMemoComponent || tag === ForwardRef) {
     commitDeletionHookEffects(deletedFiber);
   }
   let child = deletedFiber.child;
@@ -1681,8 +2199,10 @@ function commitMutationEffectsOnFiber(finishedWork: FiberNode, root: FiberRootNo
   }
   commitReconciliationEffects(finishedWork);
   const tag = finishedWork.tag;
-  if (tag === FunctionComponent || tag === SimpleMemoComponent) {
+  if (tag === FunctionComponent || tag === SimpleMemoComponent || tag === ForwardRef) {
     if ((finishedWork.flags & Update) !== NoFlags) {
+      commitHookEffectListUnmount(HookInsertion | HookHasEffect, finishedWork);
+      commitHookEffectListMount(HookInsertion | HookHasEffect, finishedWork);
       // Layout effects are destroyed during the mutation phase so that all
       // destroy functions run before any create functions.
       commitHookEffectListUnmount(HookLayout | HookHasEffect, finishedWork);
@@ -1719,6 +2239,95 @@ function commitMutationEffectsOnFiber(finishedWork: FiberNode, root: FiberRootNo
     }
     return;
   }
+  if (tag === SuspenseComponent) {
+    if ((finishedWork.flags & Update) !== NoFlags) {
+      attachSuspenseRetryListeners(finishedWork);
+    }
+    return;
+  }
+  if (tag === OffscreenComponent) {
+    if ((finishedWork.flags & Visibility) !== NoFlags) {
+      const isHidden = finishedWork.memoizedState !== null;
+      if (supportsMutation) {
+        hideOrUnhideAllChildren(finishedWork, isHidden);
+      }
+    }
+    return;
+  }
+}
+
+// ---- Suspense commit (retry listeners + visibility) ----
+function retryTimedOutBoundary(boundaryFiber: FiberNode): void {
+  scheduleRetryOnFiber(boundaryFiber);
+}
+
+function attachSuspenseRetryListeners(finishedWork: FiberNode): void {
+  const wakeables: any = finishedWork.updateQueue;
+  if (wakeables !== null) {
+    finishedWork.updateQueue = null;
+    let retryCache: any = finishedWork.stateNode;
+    if (retryCache === null) {
+      retryCache = new G.Set();
+      finishedWork.stateNode = retryCache;
+    }
+    wakeables.forEach(function (wakeable: any): void {
+      if (!retryCache.has(wakeable)) {
+        retryCache.add(wakeable);
+        const retry: any = function (): void {
+          retryTimedOutBoundary(finishedWork);
+        };
+        wakeable.then(retry, retry);
+      }
+    });
+  }
+}
+
+function hideOrUnhideAllChildren(finishedWork: FiberNode, isHidden: boolean): void {
+  let hostSubtreeRoot: FiberNode | null = null;
+  let node: FiberNode = finishedWork;
+  while (true) {
+    if (node.tag === HostComponent) {
+      if (hostSubtreeRoot === null) {
+        hostSubtreeRoot = node;
+        if (isHidden) {
+          hcHideInstance(node.stateNode);
+        } else {
+          hcUnhideInstance(node.stateNode, node.memoizedProps);
+        }
+      }
+    } else if (node.tag === HostText) {
+      if (hostSubtreeRoot === null) {
+        if (isHidden) {
+          hcHideTextInstance(node.stateNode);
+        } else {
+          hcUnhideTextInstance(node.stateNode, node.memoizedProps);
+        }
+      }
+    } else if (node.tag === OffscreenComponent && node.memoizedState !== null && node !== finishedWork) {
+      // nested hidden offscreen: leave as-is
+    } else if (node.child !== null) {
+      node.child.ret = node;
+      node = node.child;
+      continue;
+    }
+    if (node === finishedWork) {
+      return;
+    }
+    while (node.sibling === null) {
+      if (node.ret === null || node.ret === finishedWork) {
+        return;
+      }
+      if (hostSubtreeRoot === node) {
+        hostSubtreeRoot = null;
+      }
+      node = node.ret;
+    }
+    if (hostSubtreeRoot === node) {
+      hostSubtreeRoot = null;
+    }
+    node.sibling.ret = node.ret;
+    node = node.sibling;
+  }
 }
 
 // ---- commit (layout phase) ----
@@ -1732,7 +2341,7 @@ function commitLayoutEffects(finishedWork: FiberNode): void {
   }
   if ((finishedWork.flags & LayoutMask) !== NoFlags) {
     const tag = finishedWork.tag;
-    if (tag === FunctionComponent || tag === SimpleMemoComponent) {
+    if (tag === FunctionComponent || tag === SimpleMemoComponent || tag === ForwardRef) {
       commitHookEffectListMount(HookLayout | HookHasEffect, finishedWork);
     } else if (tag === HostComponent) {
       if ((finishedWork.flags & Ref) !== NoFlags) {
@@ -1745,7 +2354,7 @@ function commitLayoutEffects(finishedWork: FiberNode): void {
 // ---- commit (passive phase) ----
 function commitPassiveUnmountInsideDeletedTree(fiber: FiberNode): void {
   // deletion effects fire in parent -> child order
-  if (fiber.tag === FunctionComponent || fiber.tag === SimpleMemoComponent) {
+  if (fiber.tag === FunctionComponent || fiber.tag === SimpleMemoComponent || fiber.tag === ForwardRef) {
     commitHookEffectListUnmount(HookPassive, fiber);
   }
   let child = fiber.child;
@@ -1773,7 +2382,7 @@ function commitPassiveUnmountOnTree(fiber: FiberNode): void {
     }
   }
   if ((fiber.flags & Passive) !== NoFlags &&
-      (fiber.tag === FunctionComponent || fiber.tag === SimpleMemoComponent)) {
+      (fiber.tag === FunctionComponent || fiber.tag === SimpleMemoComponent || fiber.tag === ForwardRef)) {
     commitHookEffectListUnmount(HookPassive | HookHasEffect, fiber);
   }
 }
@@ -1787,7 +2396,7 @@ function commitPassiveMountOnTree(fiber: FiberNode): void {
     }
   }
   if ((fiber.flags & Passive) !== NoFlags &&
-      (fiber.tag === FunctionComponent || fiber.tag === SimpleMemoComponent)) {
+      (fiber.tag === FunctionComponent || fiber.tag === SimpleMemoComponent || fiber.tag === ForwardRef)) {
     commitHookEffectListMount(HookPassive | HookHasEffect, fiber);
   }
 }
@@ -1823,7 +2432,7 @@ function flushPassiveEffectsImpl(): boolean {
   return true;
 }
 
-function scheduleUpdateOnFiber(fiber: FiberNode): void {
+function markUpdateLaneFromFiberToRoot(fiber: FiberNode): FiberRootNode | null {
   fiber.lanes |= SyncLane;
   let alt = fiber.alternate;
   if (alt !== null) {
@@ -1841,12 +2450,29 @@ function scheduleUpdateOnFiber(fiber: FiberNode): void {
     parent = parent.ret;
   }
   if (node.tag === HostRoot) {
-    const root: FiberRootNode = node.stateNode;
+    return node.stateNode;
+  }
+  return null;
+}
+
+function scheduleUpdateOnFiber(fiber: FiberNode): void {
+  const root = markUpdateLaneFromFiberToRoot(fiber);
+  if (root !== null) {
     if (isBatching || isRendering) {
       pendingRoot = root;
     } else {
       performSyncWorkOnRoot(root);
     }
+  }
+}
+
+// React: retryTimedOutBoundary goes through ensureRootIsScheduled — the
+// retry render is DEFERRED to the next sync flush, never performed inline
+// from the wakeable resolution.
+function scheduleRetryOnFiber(fiber: FiberNode): void {
+  const root = markUpdateLaneFromFiberToRoot(fiber);
+  if (root !== null) {
+    pendingRoot = root;
   }
 }
 
@@ -1868,7 +2494,28 @@ function completeUnitOfWork(unitOfWork: FiberNode): void {
   while (completedWork !== null) {
     const current = completedWork.alternate;
     const returnFiber: FiberNode | null = completedWork.ret;
-    completeWork(current, completedWork);
+    if ((completedWork.flags & Incomplete) === NoFlags) {
+      const next = completeWork(current, completedWork);
+      if (next !== null) {
+        workInProgress = next;
+        return;
+      }
+    } else {
+      // this fiber did not complete: unwind
+      const next2 = unwindWork(current, completedWork);
+      if (next2 !== null) {
+        next2.flags &= HostEffectMask;
+        workInProgress = next2;
+        return;
+      }
+      if (returnFiber !== null) {
+        returnFiber.flags |= Incomplete;
+        returnFiber.subtreeFlags = NoFlags;
+        returnFiber.deletions = null;
+      } else {
+        throw new Error('render did not complete at the root');
+      }
+    }
     const siblingFiber = completedWork.sibling;
     if (siblingFiber !== null) {
       workInProgress = siblingFiber;
@@ -1890,6 +2537,13 @@ function performUnitOfWork(unitOfWork: FiberNode): void {
   }
 }
 
+// React: handleError — route thrown thenables to the nearest Suspense
+// boundary, then complete the errored unit (which may take the unwind path).
+function handleThrow(erroredWork: FiberNode, thrownValue: any): void {
+  throwException(erroredWork.ret, erroredWork, thrownValue);
+  completeUnitOfWork(erroredWork);
+}
+
 function performSyncWorkOnRoot(root: FiberRootNode): void {
   // React: performSyncWorkOnRoot flushes pending passive effects first.
   flushPassiveEffectsImpl();
@@ -1897,7 +2551,15 @@ function performSyncWorkOnRoot(root: FiberRootNode): void {
   const rootWip = createWorkInProgress(root.current, null);
   workInProgress = rootWip;
   while (workInProgress !== null) {
-    performUnitOfWork(workInProgress);
+    try {
+      performUnitOfWork(workInProgress);
+    } catch (thrownValue) {
+      const erroredWork = workInProgress;
+      if (erroredWork === null) {
+        throw thrownValue;
+      }
+      handleThrow(erroredWork, thrownValue);
+    }
   }
   isRendering = false;
   // Commit. Updates scheduled by layout effects are deferred and flushed at

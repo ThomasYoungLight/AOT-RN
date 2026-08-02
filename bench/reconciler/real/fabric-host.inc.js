@@ -127,6 +127,30 @@ function hcRemoveChild(parent, child) { fhUnsupported('removeChild'); }
 function hcCommitUpdate(inst, payload, newProps) { fhUnsupported('commitUpdate'); }
 function hcCommitTextUpdate(inst, oldText, newText) { fhUnsupported('commitTextUpdate'); }
 
+// Suspense visibility ops. Mutation-only hide/unhide never run in
+// persistence mode; hidden text clones are unsupported (the fabric demo app
+// has no Suspense) and would need an RCTRawText re-create.
+function hcHideInstance(inst) { fhUnsupported('hideInstance'); }
+function hcUnhideInstance(inst, props) { fhUnsupported('unhideInstance'); }
+function hcHideTextInstance(inst) { fhUnsupported('hideTextInstance'); }
+function hcUnhideTextInstance(inst, text) { fhUnsupported('unhideTextInstance'); }
+
+function hcCloneHiddenInstance(instance, type, props) {
+  var hiddenProps = mkObj();
+  var st = mkObj();
+  st.display = 'none';
+  hiddenProps.style = st;
+  var payload = fhCreate(hiddenProps, instance.va);
+  var inst = mkObj();
+  inst.node = FH.ui.cloneNodeWithNewProps(instance.node, payload);
+  inst.va = instance.va;
+  return inst;
+}
+
+function hcCloneHiddenTextInstance(instance, text) {
+  fhUnsupported('cloneHiddenTextInstance');
+}
+
 function fhStatsLine() {
   var s = FH.stats;
   return 'fabric-host: creates=' + String(s.creates) +

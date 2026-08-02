@@ -41,8 +41,12 @@ var HostConfig = {
   appendChildToContainerChildSet: function (childSet, child) { hcAppendChildToContainerChildSet(childSet, child); },
   finalizeContainerChildren: function (container, childSet) { hcFinalizeContainerChildren(container, childSet); },
   replaceContainerChildren: function (container, childSet) { hcReplaceContainerChildren(container, childSet); },
-  cloneHiddenInstance: function (instance) { return instance; },
-  cloneHiddenTextInstance: function (instance) { return instance; },
+  cloneHiddenInstance: function (instance, type, props, handle) {
+    return hcCloneHiddenInstance(instance, type, props);
+  },
+  cloneHiddenTextInstance: function (instance, text, handle) {
+    return hcCloneHiddenTextInstance(instance, text);
+  },
 };
 
 var R = Reconciler(HostConfig);
@@ -59,6 +63,10 @@ var appApi = installFeedApp({
   useLayoutEffect: React.useLayoutEffect,
   createContext: React.createContext,
   useContext: React.useContext,
+  useInsertionEffect: React.useInsertionEffect,
+  forwardRef: React.forwardRef,
+  lazy: React.lazy,
+  Suspense: React.Suspense,
 });
 var flushPassive = function () { R.flushPassiveEffects(); };
 

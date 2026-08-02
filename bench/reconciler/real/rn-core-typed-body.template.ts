@@ -18,6 +18,10 @@ function makeTypedCoreExports(): any {
     RA.useLayoutEffect = useLayoutEffectImpl;
     RA.createContext = createContextImpl;
     RA.useContext = useContextImpl;
+    RA.useInsertionEffect = useInsertionEffectImpl;
+    RA.forwardRef = forwardRefImpl;
+    RA.lazy = lazyImpl;
+    RA.Suspense = SuspenseType;
     const appApi: any = installFeedApp(RA);
     const flushPassive: any = function (): void {
       flushPassiveEffectsImpl();

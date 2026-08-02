@@ -1,7 +1,7 @@
 From 4709e32b34d229e0805d679b6fb916bf4161af96 Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 00:28:57 +0800
-Subject: [PATCH 1/7] Hybrid AOT prototype: SHUnit ring dispatch in RN
+Subject: [PATCH 1/8] Hybrid AOT prototype: SHUnit ring dispatch in RN
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
@@ -6784,7 +6784,7 @@ index 9546a3b..1a95bf5 100644
 From 90c186ac1d579ad45326e2a4e9e7a78ce3da1ce7 Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 01:35:19 +0800
-Subject: [PATCH 2/7] Live Fabric surface driven by the hybrid ring-0
+Subject: [PATCH 2/8] Live Fabric surface driven by the hybrid ring-0
  reconciler
 
 HybridFabricDemo takes over the RNTester root surface and binds the ring-0
@@ -13098,7 +13098,7 @@ index 3b5031b..ddd11e6 100644
 From cca4e6fc09f7531dc6462fe92024c2f52c4f38cf Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 02:05:18 +0800
-Subject: [PATCH 3/7] Hash-per-__d-call dispatch + policy-selected ring-1 unit
+Subject: [PATCH 3/8] Hash-per-__d-call dispatch + policy-selected ring-1 unit
 
 The serializer appends each module's content hash to its own __d call (no
 central __moduleHashes table) so modules stay self-describing under
@@ -13301,7 +13301,7 @@ index f850b93..fbd66a8 100644
 From a82cde03e0551bd538e1e215fd1b43322c1d0f08 Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 02:48:45 +0800
-Subject: [PATCH 4/7] Rebuilt ring-0 twins with the feature-extended reconciler
+Subject: [PATCH 4/8] Rebuilt ring-0 twins with the feature-extended reconciler
  workload
 
 
@@ -13624,7 +13624,7 @@ index ddd11e6..0d155ae 100644
 From 647462dd17f2117a3841da521aa0e121cf2f947f Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 03:05:20 +0800
-Subject: [PATCH 5/7] Fabric takeover demo: handle system bars (edge-to-edge
+Subject: [PATCH 5/8] Fabric takeover demo: handle system bars (edge-to-edge
  insets)
 
 The takeover surface bypasses AppContainer/safe-area plumbing, so the glue
@@ -13714,7 +13714,7 @@ index 0fc3fac..5fb4d49 100644
 From a676bee2bf0b6924b1665a4ed1eaa7848e344676 Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 03:32:46 +0800
-Subject: [PATCH 6/7] Ring-1 cost instrumentation: eval timing +
+Subject: [PATCH 6/8] Ring-1 cost instrumentation: eval timing +
  factory-execution recorder
 
 evaluateSHUnit wrapped in chrono, exposed as global.__hybridEvalMs (glog is
@@ -13886,7 +13886,7 @@ index fbd66a8..3573e73 100644
 From 808ddfc7032094a207bbe93028762222c2b24d6f Mon Sep 17 00:00:00 2001
 From: Thomas <thomas.wang@ponyft.com>
 Date: Sun, 2 Aug 2026 04:10:04 +0800
-Subject: [PATCH 7/7] HybridShop: real-app trial for the hybrid AOT pipeline
+Subject: [PATCH 7/8] HybridShop: real-app trial for the hybrid AOT pipeline
 
 Ordinary RN app (normal ReactFabric rendering): FlatList catalog over a fake
 async API, hand-rolled stack navigation with LAZILY require()d screens,
@@ -15008,6 +15008,313 @@ index 0000000..e90568b
 +}
 +
 +module.exports = {ThemeContext, palettes, useTheme};
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 90bf8984f1b73c1e043b341af2ede04b6460420f Mon Sep 17 00:00:00 2001
+From: Thomas <thomas.wang@ponyft.com>
+Date: Sun, 2 Aug 2026 12:39:12 +0800
+Subject: [PATCH 8/8] Rebuilt ring-0 twins with the Suspense-capable reconciler
+ workload
+
+
+---
+ .../rn-tester/js/hybrid/HybridReactCore.js    | 211 +++++++++++++++++-
+ 1 file changed, 205 insertions(+), 6 deletions(-)
+
+diff --git a/packages/rn-tester/js/hybrid/HybridReactCore.js b/packages/rn-tester/js/hybrid/HybridReactCore.js
+index 0d155ae..9025fc9 100644
+--- a/packages/rn-tester/js/hybrid/HybridReactCore.js
++++ b/packages/rn-tester/js/hybrid/HybridReactCore.js
+@@ -5342,6 +5342,9 @@ var hostStats = {
+   clones: 0,
+   childSets: 0,
+   replaces: 0,
++  hides: 0,
++  unhides: 0,
++  hiddenClones: 0,
+   checksum: 0
+ };
+ var nextInstanceId = 1;
+@@ -5438,8 +5441,29 @@ function hcCommitTextUpdate(inst, oldText, newText) {
+   mix(inst.id);
+   mix(hashStr(newText));
+ }
++function hcHideInstance(inst) {
++  hostStats.hides++;
++  mix(17);
++  mix(coerceInt(inst.id));
++}
++function hcUnhideInstance(inst, props) {
++  hostStats.unhides++;
++  mix(18);
++  mix(coerceInt(inst.id));
++}
++function hcHideTextInstance(inst) {
++  hostStats.hides++;
++  mix(19);
++  mix(coerceInt(inst.id));
++}
++function hcUnhideTextInstance(inst, text) {
++  hostStats.unhides++;
++  mix(20);
++  mix(coerceInt(inst.id));
++  mix(hashStr(text));
++}
+ function hostStatsLine() {
+-  return "host: creates=" + String(hostStats.creates) + " textCreates=" + String(hostStats.textCreates) + " appends=" + String(hostStats.appends) + " inserts=" + String(hostStats.inserts) + " removes=" + String(hostStats.removes) + " updates=" + String(hostStats.updates) + " textUpdates=" + String(hostStats.textUpdates) + " clones=" + String(hostStats.clones) + " childSets=" + String(hostStats.childSets) + " replaces=" + String(hostStats.replaces) + " checksum=" + String(hostStats.checksum >>> 0);
++  return "host: creates=" + String(hostStats.creates) + " textCreates=" + String(hostStats.textCreates) + " appends=" + String(hostStats.appends) + " inserts=" + String(hostStats.inserts) + " removes=" + String(hostStats.removes) + " updates=" + String(hostStats.updates) + " textUpdates=" + String(hostStats.textUpdates) + " clones=" + String(hostStats.clones) + " childSets=" + String(hostStats.childSets) + " replaces=" + String(hostStats.replaces) + " hides=" + String(hostStats.hides) + " unhides=" + String(hostStats.unhides) + " hiddenClones=" + String(hostStats.hiddenClones) + " checksum=" + String(hostStats.checksum >>> 0);
+ }
+ function hcResetAll() {
+   nextInstanceId = 1;
+@@ -5449,6 +5473,9 @@ function hostStatsReset() {
+   hostStats.clones = 0;
+   hostStats.childSets = 0;
+   hostStats.replaces = 0;
++  hostStats.hides = 0;
++  hostStats.unhides = 0;
++  hostStats.hiddenClones = 0;
+   hostStats.creates = 0;
+   hostStats.textCreates = 0;
+   hostStats.appends = 0;
+@@ -5483,6 +5510,90 @@ function installFeedApp(RA) {
+     }
+   }
+   var ThemeContext = RA.createContext("light");
++  function makeSyncThenable() {
++    var t = mkObj();
++    t.status = 0;
++    t.value = null;
++    t.callbacks = mkList();
++    t.then = function(onFulfilled, onRejected) {
++      if (t.status === 1) {
++        onFulfilled(t.value);
++      } else {
++        t.callbacks.push(onFulfilled);
++      }
++    };
++    t.resolve = function(v) {
++      if (t.status === 1) {
++        return;
++      }
++      t.status = 1;
++      t.value = v;
++      var cbs = t.callbacks;
++      t.callbacks = mkList();
++      for (var ci = 0; ci < cbs.length; ci++) {
++        cbs[ci](v);
++      }
++    };
++    return t;
++  }
++  var trendsData = mkObj();
++  trendsData.thenable = null;
++  trendsData.value = null;
++  function readTrendsData() {
++    if (trendsData.value !== null) {
++      return trendsData.value;
++    }
++    if (trendsData.thenable === null) {
++      trendsData.thenable = makeSyncThenable();
++    }
++    throw trendsData.thenable;
++  }
++  exposed.invalidateTrendsData = function() {
++    trendsData.value = null;
++    trendsData.thenable = null;
++  };
++  exposed.resolveTrendsData = function(v) {
++    trendsData.value = v;
++    if (trendsData.thenable !== null) {
++      trendsData.thenable.resolve(v);
++    }
++  };
++  function TrendsBody(props) {
++    var data = readTrendsData();
++    fxMix(41);
++    RA.useEffect(function() {
++      fxMix(42);
++      return function() {
++        fxMix(43);
++      };
++    }, mkList());
++    return h(
++      "view-trends",
++      { id: -3, background: "#eef" },
++      h("text-trend", { id: -3, fontSize: 12 }, "trends: " + data + " v" + props.version)
++    );
++  }
++  var trendsLoadThenable = makeSyncThenable();
++  exposed.resolveTrendsModule = function() {
++    var mod = mkObj();
++    mod.default = TrendsBody;
++    trendsLoadThenable.resolve(mod);
++  };
++  var LazyTrends = RA.lazy(function() {
++    return trendsLoadThenable;
++  });
++  var FancyBanner = RA.forwardRef(function(props, ref) {
++    fxMix(51);
++    return h("view-banner", { id: -5, ref, height: 20, label: props.label }, props.label);
++  });
++  function statsCompare(prev, next) {
++    return prev.version === next.version;
++  }
++  function StatsPanel(props) {
++    fxMix(61);
++    return h("view-stats", { id: -6, height: 24 }, "stats v" + props.version + " n" + props.noise);
++  }
++  var MemoStatsPanel = RA.memo(StatsPanel, statsCompare);
+   function makePost(id, author, ts, content, likes, liked) {
+     return { id, author, ts, content, likes, liked };
+   }
+@@ -5569,9 +5680,13 @@ function installFeedApp(RA) {
+     var pc = RA.useState(0);
+     var passiveEcho = pc[0];
+     var setPassiveEcho = pc[1];
++    var st2 = RA.useState(false);
++    var showTrends = st2[0];
++    var setShowTrends = st2[1];
+     exposed.setPosts = setPosts;
+     exposed.setVersion = setVersion;
+     exposed.setTheme = setTheme;
++    exposed.setShowTrends = setShowTrends;
+     var onToggle = RA.useCallback(function(id) {
+       setPosts(function(ps) {
+         var next = ps.slice();
+@@ -5620,6 +5735,22 @@ function installFeedApp(RA) {
+     var footerRef = RA.useCallback(function(inst) {
+       fxMix(inst === null ? -77 : 77);
+     }, mkList());
++    var depsI = mkList();
++    depsI.push(version);
++    RA.useInsertionEffect(function() {
++      fxMix(71);
++      return function() {
++        fxMix(72);
++      };
++    }, depsI);
++    var bannerRef = RA.useRef(null);
++    var depsB = mkList();
++    RA.useEffect(function() {
++      fxMix(bannerRef.current !== null ? 80 + coerceInt(bannerRef.current.id) : -80);
++      return function() {
++        fxMix(-81);
++      };
++    }, depsB);
+     var children = mkList();
+     children.push(h(MemoHeader, { key: 1e6, title: "Feed v" + version }));
+     var totalLikes = anyVal(0);
+@@ -5636,6 +5767,14 @@ function installFeedApp(RA) {
+         onToggle
+       }));
+     }
++    children.push(h(FancyBanner, { key: 1000003, label: "Feed banner v" + version, ref: bannerRef }));
++    children.push(h(MemoStatsPanel, { key: 1000004, version, noise: totalLikes }));
++    if (showTrends) {
++      children.push(h(RA.Suspense, {
++        key: 1000002,
++        fallback: h("view-loading", { id: -4, height: 30 }, "loading trends\u2026")
++      }, h(LazyTrends, { version })));
++    }
+     children.push(h(MemoFooter, {
+       key: 1000001,
+       likes: totalLikes,
+@@ -5680,6 +5819,58 @@ function runFeedDriver(app, flushInteraction, flushPassive, log) {
+   }
+   var nextPostId = anyVal(POSTS + 1);
+   function interact(tick) {
++    if (tick === 60) {
++      flushInteraction(function() {
++        exposed.setShowTrends(function() {
++          return true;
++        });
++      });
++      if (flushPassive !== null && flushPassive !== void 0) {
++        flushPassive();
++      }
++      exposed.resolveTrendsModule();
++      flushInteraction(function() {
++      });
++      if (flushPassive !== null && flushPassive !== void 0) {
++        flushPassive();
++      }
++      exposed.resolveTrendsData("hot-items-1");
++      flushInteraction(function() {
++      });
++      if (flushPassive !== null && flushPassive !== void 0) {
++        flushPassive();
++      }
++      return;
++    }
++    if (tick === 90 || tick === 800) {
++      exposed.invalidateTrendsData();
++      flushInteraction(function() {
++        exposed.setVersion(function(v) {
++          return v + 1;
++        });
++      });
++      if (flushPassive !== null && flushPassive !== void 0) {
++        flushPassive();
++      }
++      exposed.resolveTrendsData(tick === 90 ? "hot-items-2" : "hot-items-3");
++      flushInteraction(function() {
++      });
++      if (flushPassive !== null && flushPassive !== void 0) {
++        flushPassive();
++      }
++      return;
++    }
++    if (tick === 1500) {
++      flushInteraction(function() {
++        exposed.setShowTrends(function() {
++          return false;
++        });
++      });
++      if (flushPassive !== null && flushPassive !== void 0) {
++        flushPassive();
++      }
++      return;
++    }
+     var r = rand(100);
+     if (r < 60) {
+       var id = ids[rand(ids.length)];
+@@ -5838,13 +6029,17 @@ var HostConfig = {
+   commitUpdate: function(inst, payload, type, oldProps, newProps) {
+     hcCommitUpdate(inst, payload, newProps);
+   },
+-  hideInstance: function() {
++  hideInstance: function(i) {
++    hcHideInstance(i);
+   },
+-  unhideInstance: function() {
++  unhideInstance: function(i, p) {
++    hcUnhideInstance(i, p);
+   },
+-  hideTextInstance: function() {
++  hideTextInstance: function(i) {
++    hcHideTextInstance(i);
+   },
+-  unhideTextInstance: function() {
++  unhideTextInstance: function(i, t) {
++    hcUnhideTextInstance(i, t);
+   },
+   clearContainer: function(c) {
+     c.children = mkList();
+@@ -5881,7 +6076,11 @@ function runBenchmark() {
+     useEffect: React.useEffect,
+     useLayoutEffect: React.useLayoutEffect,
+     createContext: React.createContext,
+-    useContext: React.useContext
++    useContext: React.useContext,
++    useInsertionEffect: React.useInsertionEffect,
++    forwardRef: React.forwardRef,
++    lazy: React.lazy,
++    Suspense: React.Suspense
+   });
+   var flushPassive = function() {
+     R.flushPassiveEffects();
 -- 
 2.50.1 (Apple Git-155)
 

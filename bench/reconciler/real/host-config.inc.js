@@ -14,6 +14,9 @@ var hostStats = {
   clones: 0,
   childSets: 0,
   replaces: 0,
+  hides: 0,
+  unhides: 0,
+  hiddenClones: 0,
   checksum: 0,
 };
 var nextInstanceId = 1;
@@ -164,6 +167,48 @@ function hcReplaceContainerChildren(container, childSet) {
   mix(13);
 }
 
+// ---- Suspense visibility ops ----
+function hcHideInstance(inst) {
+  hostStats.hides++;
+  mix(17);
+  mix(coerceInt(inst.id));
+}
+
+function hcUnhideInstance(inst, props) {
+  hostStats.unhides++;
+  mix(18);
+  mix(coerceInt(inst.id));
+}
+
+function hcHideTextInstance(inst) {
+  hostStats.hides++;
+  mix(19);
+  mix(coerceInt(inst.id));
+}
+
+function hcUnhideTextInstance(inst, text) {
+  hostStats.unhides++;
+  mix(20);
+  mix(coerceInt(inst.id));
+  mix(hashStr(text));
+}
+
+function hcCloneHiddenInstance(instance, type, props) {
+  hostStats.hiddenClones++;
+  var inst = {id: nextInstanceId++, type: instance.type, props: props, children: instance.children.slice()};
+  mix(23);
+  mix(coerceInt(instance.id));
+  return inst;
+}
+
+function hcCloneHiddenTextInstance(instance, text) {
+  hostStats.hiddenClones++;
+  var inst = {id: nextInstanceId++, type: '#text', text: text, children: null};
+  mix(24);
+  mix(coerceInt(instance.id));
+  return inst;
+}
+
 function hostStatsLine() {
   return (
     'host: creates=' + String(hostStats.creates) +
@@ -176,6 +221,9 @@ function hostStatsLine() {
     ' clones=' + String(hostStats.clones) +
     ' childSets=' + String(hostStats.childSets) +
     ' replaces=' + String(hostStats.replaces) +
+    ' hides=' + String(hostStats.hides) +
+    ' unhides=' + String(hostStats.unhides) +
+    ' hiddenClones=' + String(hostStats.hiddenClones) +
     ' checksum=' + String(hostStats.checksum >>> 0)
   );
 }
@@ -189,6 +237,9 @@ function hostStatsReset() {
   hostStats.clones = 0;
   hostStats.childSets = 0;
   hostStats.replaces = 0;
+  hostStats.hides = 0;
+  hostStats.unhides = 0;
+  hostStats.hiddenClones = 0;
   hostStats.creates = 0;
   hostStats.textCreates = 0;
   hostStats.appends = 0;

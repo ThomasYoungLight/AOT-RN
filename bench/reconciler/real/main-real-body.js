@@ -36,10 +36,10 @@ var HostConfig = {
   commitTextUpdate: function (i, o, n) { hcCommitTextUpdate(i, o, n); },
   commitMount: function () {},
   commitUpdate: function (inst, payload, type, oldProps, newProps) { hcCommitUpdate(inst, payload, newProps); },
-  hideInstance: function () {},
-  unhideInstance: function () {},
-  hideTextInstance: function () {},
-  unhideTextInstance: function () {},
+  hideInstance: function (i) { hcHideInstance(i); },
+  unhideInstance: function (i, p) { hcUnhideInstance(i, p); },
+  hideTextInstance: function (i) { hcHideTextInstance(i); },
+  unhideTextInstance: function (i, t) { hcUnhideTextInstance(i, t); },
   clearContainer: function (c) { c.children = []; },
   detachDeletedInstance: function () {},
   getCurrentEventPriority: function () { return 16; }, // DefaultEventPriority
@@ -64,6 +64,10 @@ var appApi = installFeedApp({
   useLayoutEffect: React.useLayoutEffect,
   createContext: React.createContext,
   useContext: React.useContext,
+  useInsertionEffect: React.useInsertionEffect,
+  forwardRef: React.forwardRef,
+  lazy: React.lazy,
+  Suspense: React.Suspense,
 });
 var flushPassive = function () { R.flushPassiveEffects(); };
 

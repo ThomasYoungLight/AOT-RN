@@ -629,6 +629,27 @@ Trial-infra notes: `__hybridT0` stamped in the dispatch prelude anchors TTI at b
 
 Artifacts: `js/hybridshop/**` (app + auto-pilot), whole-bundle `RING1_INCLUDE`, startup profiles for the shop app under `bench/hybrid/profiles/`, TTI anchor in `hybrid-serializer.js`.
 
+### Experiment 18 (2026-08-02): Suspense, lazy, forwardRef, insertion effects, memo(compare)
+
+The typed port now covers the last app-blocking React features, verified two-axis (host checksum + effect-order `fx`) in both host modes and running as ring 0 on both phones.
+
+**Ported (React 18.3.1 legacy-sync semantics, exact):**
+- **`Suspense` + `React.lazy`** — the big one: Suspense/Offscreen/Fragment/Lazy work tags; thrown-thenable handling (`throwException` with legacy's two capture paths — `ShouldCapture` on the direct-parent boundary vs `DidCapture` + commit-the-incomplete-source with `ForceUpdateForLegacySuspense`); the full **unwind machinery** in `completeUnitOfWork` (`Incomplete`/`HostEffectMask`, `unwindWork` popping providers); the boundary's completeWork `DidCapture → return workInProgress` re-render; legacy fallback mounting that REUSES the progressed primary fragment; **hidden-primary semantics** (Offscreen `Visibility` flag → mutation-mode `hideOrUnhideAllChildren`, persistence-mode hidden clones through `appendAllChildrenToContainer`); commit-attached **retry listeners** with React's deferred scheduling (`ensureRootIsScheduled`, not inline); and legacy's remount rule for suspended lazy components (`resetSuspendedCurrentOnMountInLegacyMode`: disconnect alternates + Placement).
+- **`forwardRef`** (render with ref as second arg, full FC hook treatment), **`useInsertionEffect`** (mutation-phase unmount+mount before layout destroys, deletion-inline destroys), **`memo` with custom compare** (MemoComponent wrapper fiber, compare-based bailout, single-child clone).
+
+**Workload:** a lazy `TrendsPanel` under `Suspense` driven by **synchronous custom thenables** (driver-fired, so retries resolve deterministically inside the measured loop — React accepts any thenable), exercising mount-suspend → double retry (module, then data), two update-suspends that HIDE committed content and unhide on resolve, and subtree unmount; plus a forwardRef banner, a custom-compare stats panel that ignores a noisy prop, and versioned insertion effects.
+
+**Result: all four accumulators identical** — mutation `424919205 / fx 1208032539` (hides=3, unhides=3), persistence `1263784292 / fx 1208032539` (hiddenClones=3, 78,508 clones) — reproduced on-device on both phones as ring 0 (S23 0.729 ms/int, iPhone 0.443).
+
+**Three divergences the harness caught on the way** (each an exact-semantics lesson):
+1. `bubbleProperties`-adjacent: through-`any` writes to typed class fields are **runtime-checked** by shermes even when the field admits typed writes — a NEW typed-subset rule (fix: write through typed references; the Suspense state assignments hit it).
+2. **Retry timing**: React's retry only *schedules* (`ensureRootIsScheduled`) — my inline flush produced renders one flush early. Only visible because the sync-thenable design put retries inside the measured window.
+3. **Legacy lazy remount**: after a suspended lazy commit, the stale alternate still carries the `LazyComponent` tag; React treats re-render as a NEW MOUNT (alternates disconnected, `Placement` on the wip). Without it, the resolved content was appended instead of placed — a one-`insertBefore` difference the host checksum caught.
+
+Perf with the full surface intact: host mutation typed 0.413 vs interp 0.743 (**1.80×**), persistent 0.498 vs 0.815 (**1.64×**). Still out of scope: class components, concurrent lanes/priorities, hydration, SuspenseList — none load-bearing for modern function-component RN apps.
+
+Artifacts: ~700 new lines in `typed-port-core.ts`; visibility ops in both host layers (`hcHide*/hcUnhide*/hcCloneHidden*`, mix codes 17–24); twin HostConfigs wire visibility + hidden clones; extended `feed-app.inc.js` + RA surface in all five harnesses.
+
 ### Rejected alternatives
 
 - **Dual engine / native core + JS islands** (Valdi-style): two heaps, serialization at every boundary, function-identity hazards.
