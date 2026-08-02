@@ -43,6 +43,88 @@ function installConcurrentApp(RA) {
     return {id: id, tag: tag};
   }
 
+  // Synchronous thenable: resolution fires callbacks INLINE so pings and
+  // retries land deterministically inside the driver's flush sequence.
+  function makeSyncThenable() {
+    var t = mkObj();
+    t.status = 0;
+    t.value = null;
+    t.callbacks = mkList();
+    t.then = function (onFulfilled, onRejected) {
+      if (t.status === 1) {
+        onFulfilled(t.value);
+      } else {
+        t.callbacks.push(onFulfilled);
+      }
+    };
+    t.resolve = function (v) {
+      if (t.status === 1) {
+        return;
+      }
+      t.status = 1;
+      t.value = v;
+      var cbs = t.callbacks;
+      t.callbacks = mkList();
+      for (var ci = 0; ci < cbs.length; ci++) {
+        cbs[ci](v);
+      }
+    };
+    return t;
+  }
+
+  // suspense data resource for the lazy panel
+  var panelData = mkObj();
+  panelData.thenable = null;
+  panelData.value = null;
+  function readPanelData() {
+    if (panelData.value !== null) {
+      return panelData.value;
+    }
+    if (panelData.thenable === null) {
+      panelData.thenable = makeSyncThenable();
+    }
+    throw panelData.thenable;
+  }
+  exposed.invalidatePanelData = function () {
+    panelData.value = null;
+    panelData.thenable = null;
+  };
+  exposed.resolvePanelData = function (v) {
+    panelData.value = v;
+    if (panelData.thenable !== null) {
+      panelData.thenable.resolve(v);
+    }
+  };
+
+  function PanelBody(props) {
+    var data = readPanelData();
+    fxMix(401);
+    var depsL = mkList();
+    depsL.push(data);
+    RA.useLayoutEffect(function () {
+      fxMix(402);
+      return function () { fxMix(403); };
+    }, depsL);
+    var depsE = mkList();
+    depsE.push(props.version);
+    RA.useEffect(function () {
+      fxMix(404);
+      return function () { fxMix(405); };
+    }, depsE);
+    return h('view-panel', {id: -7, height: 40, v: props.version},
+      h('text-panel', {id: -7, fontSize: 12}, 'panel ' + data + ' v' + props.version));
+  }
+
+  var panelLoadThenable = makeSyncThenable();
+  exposed.resolvePanelModule = function () {
+    var mod = mkObj();
+    mod.default = PanelBody;
+    panelLoadThenable.resolve(mod);
+  };
+  var LazyPanel = RA.lazy(function () {
+    return panelLoadThenable;
+  });
+
   function Row(props) {
     fxMix(9);
     var depsE = mkList();
@@ -95,6 +177,12 @@ function installConcurrentApp(RA) {
     var rs = RA.useState(props.initialItems);
     var rows = rs[0];
     var setRows = rs[1];
+    var sp = RA.useState(false);
+    var showPanel = sp[0];
+    var setShowPanel = sp[1];
+    var pv = RA.useState(0);
+    var panelVersion = pv[0];
+    var setPanelVersion = pv[1];
     var tr = RA.useTransition();
     var isPending = tr[0];
     var startT = tr[1];
@@ -103,6 +191,8 @@ function installConcurrentApp(RA) {
     exposed.setQuery = setQuery;
     exposed.setTicker = setTicker;
     exposed.setCounter = setCounter;
+    exposed.setShowPanel = setShowPanel;
+    exposed.setPanelVersion = setPanelVersion;
     exposed.applyMarks = function (seed) {
       startT(function () {
         setMarkSeed(seed);
@@ -121,6 +211,11 @@ function installConcurrentApp(RA) {
           next.unshift(np);
           return next;
         });
+      });
+    };
+    exposed.bumpPanelT = function () {
+      startT(function () {
+        setPanelVersion(function (v) { return v + 1; });
       });
     };
     exposed.removeRow = function () {
@@ -172,6 +267,12 @@ function installConcurrentApp(RA) {
       pending: isPending,
     }));
     children.push(h(MemoPreview, {key: 1000001, dq: deferredQuery}));
+    if (showPanel) {
+      children.push(h(RA.Suspense, {
+        key: 1000002,
+        fallback: h('view-ploading', {id: -8, height: 30}, 'loading panel\u2026'),
+      }, h(LazyPanel, {version: panelVersion})));
+    }
     for (var i = anyVal(0); i < items.length; i++) {
       var item = items[i];
       var marked = markSeed > 0 && (item.id * 31 + markSeed) % 5 === 0;
@@ -220,6 +321,55 @@ function runConcurrentDriver(app, ctl, log) {
   }
 
   function interact(tick) {
+    // deterministic concurrent-Suspense lifecycle (WARMUP=40; all in the
+    // measured window)
+    if (tick === 100) {
+      // mount-suspend at default lane: fallback commits; the resolved module
+      // retries and suspends on data (advance past the retry throttle);
+      // second fallback commit; data resolves; content commits
+      exposed.setShowPanel(function () { return true; });
+      ctl.flushAll();
+      exposed.resolvePanelModule();
+      ctl.advance(600);
+      ctl.flushAll();
+      exposed.resolvePanelData('panel-1');
+      ctl.advance(600);
+      ctl.flushAll();
+      ctl.advance(100);
+      return;
+    }
+    if (tick === 200 || tick === 600) {
+      // update-suspend at default lane: visible content gets hidden, so the
+      // just-noticeable-difference delay applies; advance the clock into the
+      // commit window before flushing
+      exposed.invalidatePanelData();
+      exposed.setPanelVersion(function (v) { return v + 1; });
+      ctl.advance(119);
+      ctl.flushAll();
+      exposed.resolvePanelData(tick === 200 ? 'panel-2' : 'panel-3');
+      ctl.advance(600);
+      ctl.flushAll();
+      ctl.advance(100);
+      return;
+    }
+    if (tick === 400) {
+      // transition-suspend: a suspended transition never commits a fallback;
+      // it waits (isPending stays true) until the data ping reschedules it
+      exposed.invalidatePanelData();
+      exposed.bumpPanelT();
+      ctl.flushAll();
+      exposed.resolvePanelData('panel-4');
+      ctl.flushAll();
+      ctl.advance(100);
+      return;
+    }
+    if (tick === 700) {
+      // unmount the whole suspense subtree (deletion effects incl. passive)
+      exposed.setShowPanel(function () { return false; });
+      ctl.flushAll();
+      ctl.advance(100);
+      return;
+    }
     var r = rand(100);
     if (r < 18) {
       // discrete update: sync lane, flushed from the Immediate task

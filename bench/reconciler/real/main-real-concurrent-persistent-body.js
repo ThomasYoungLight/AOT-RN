@@ -10,8 +10,8 @@ var log = typeof print !== 'undefined' ? print : console.log;
 var g = globalThis;
 
 var HostConfig = {
-  supportsMutation: true,
-  supportsPersistence: false,
+  supportsMutation: false,
+  supportsPersistence: true,
   supportsHydration: false,
   isPrimaryRenderer: true,
   noTimeout: -1,
@@ -29,28 +29,27 @@ var HostConfig = {
   finalizeInitialChildren: function () { return false; },
   prepareUpdate: function (inst, type, oldProps, newProps) { return diffHostProps(oldProps, newProps); },
   shouldSetTextContent: function () { return false; },
-  appendChild: function (p, c) { hcAppendChild(p, c); },
-  appendChildToContainer: function (ctr, c) { hcAppendChild(ctr, c); },
-  insertBefore: function (p, c, b) { hcInsertBefore(p, c, b); },
-  insertInContainerBefore: function (ctr, c, b) { hcInsertBefore(ctr, c, b); },
-  removeChild: function (p, c) { hcRemoveChild(p, c); },
-  removeChildFromContainer: function (ctr, c) { hcRemoveChild(ctr, c); },
-  resetTextContent: function () {},
-  commitTextUpdate: function (i, o, n) { hcCommitTextUpdate(i, o, n); },
-  commitMount: function () {},
-  commitUpdate: function (inst, payload, type, oldProps, newProps) { hcCommitUpdate(inst, payload, newProps); },
-  hideInstance: function (i) { hcHideInstance(i); },
-  unhideInstance: function (i, p) { hcUnhideInstance(i, p); },
-  hideTextInstance: function (i) { hcHideTextInstance(i); },
-  unhideTextInstance: function (i, t) { hcUnhideTextInstance(i, t); },
-  clearContainer: function (c) { c.children = []; },
-  detachDeletedInstance: function () {},
   getCurrentEventPriority: function () { return 16; }, // DefaultEventPriority
   getInstanceFromNode: function () { return null; },
   beforeActiveInstanceBlur: function () {},
   afterActiveInstanceBlur: function () {},
   prepareScopeUpdate: function () {},
   getInstanceFromScope: function () { return null; },
+  detachDeletedInstance: function () {},
+  // persistence
+  cloneInstance: function (instance, updatePayload, type, oldProps, newProps, handle, keepChildren) {
+    return hcCloneInstance(instance, updatePayload, type, newProps, keepChildren);
+  },
+  createContainerChildSet: function () { return hcCreateContainerChildSet(); },
+  appendChildToContainerChildSet: function (childSet, child) { hcAppendChildToContainerChildSet(childSet, child); },
+  finalizeContainerChildren: function (container, childSet) { hcFinalizeContainerChildren(container, childSet); },
+  replaceContainerChildren: function (container, childSet) { hcReplaceContainerChildren(container, childSet); },
+  cloneHiddenInstance: function (instance, type, props, handle) {
+    return hcCloneHiddenInstance(instance, type, props);
+  },
+  cloneHiddenTextInstance: function (instance, text, handle) {
+    return hcCloneHiddenTextInstance(instance, text);
+  },
 };
 
 var R = Reconciler(HostConfig);
@@ -95,7 +94,7 @@ var gcs0 = (typeof HermesInternal !== 'undefined' && HermesInternal.getInstrumen
   ? HermesInternal.getInstrumentedStats() : null;
 var res = driver.run();
 
-log('real-react-reconciler-concurrent(18.3.1): ' + res.ticks + ' interactions, ' + res.rows + ' rows');
+log('real-react-reconciler-concurrent-persistent(18.3.1): ' + res.ticks + ' interactions, ' + res.rows + ' rows');
 log(hostStatsLine() + ' fx=' + res.fx + ' sched=' + (g.__schedTrace.sum >>> 0));
 log('hostTimeouts: ' + (g.__timeouts || 0));
 log('schedStats: schedules=' + g.__schedTrace.schedules + ' cancels=' + g.__schedTrace.cancels +

@@ -1778,26 +1778,13 @@ function renderWithHooks(current: FiberNode | null, workInProgress: FiberNode, C
   return children;
 }
 
-// render threw: reset hooks module state (React: resetHooksAfterThrow) and,
-// in legacy mode, restore the source fiber's pre-render hook state so the
-// incomplete fiber can be committed as-is (resetSuspendedComponent).
-function resetHooksAfterThrow(sourceFiber: FiberNode): void {
+// render threw: reset the hooks module state (React: resetHooksAfterThrow).
+// The legacy pre-render state restore lives in resetSuspendedComponent.
+function resetHooksAfterThrow(): void {
   hooksRenderLanes = NoLanes;
   currentlyRenderingFiber = null;
   currentHook = null;
   workInProgressHook = null;
-  const tag = sourceFiber.tag;
-  if (tag === FunctionComponent || tag === ForwardRef || tag === SimpleMemoComponent) {
-    const currentSource = sourceFiber.alternate;
-    if (currentSource !== null) {
-      sourceFiber.updateQueue = currentSource.updateQueue;
-      sourceFiber.memoizedState = currentSource.memoizedState;
-      sourceFiber.lanes = currentSource.lanes;
-    } else {
-      sourceFiber.updateQueue = null;
-      sourceFiber.memoizedState = null;
-    }
-  }
 }
 
 // ---- child reconciliation (ReactChildFiber, mutation mode) ----
@@ -2168,6 +2155,9 @@ function updateMemoComponent(current: FiberNode | null, workInProgress: FiberNod
 // an inconsistent state — treat it like a new mount: disconnect the
 // alternates and schedule a Placement effect.
 function resetSuspendedCurrentOnMountInLegacyMode(current: FiberNode | null, workInProgress: FiberNode): void {
+  if ((workInProgress.mode & ConcurrentMode) !== NoMode) {
+    return;
+  }
   if (current !== null) {
     current.alternate = null;
     workInProgress.alternate = null;
@@ -2227,11 +2217,43 @@ function updateContextProvider(current: FiberNode | null, workInProgress: FiberN
 // ---- Suspense (ReactFiberBeginWork, legacy sync mode only) ----
 const SUSPENDED_MARKER: any = mkObj();
 SUSPENDED_MARKER.dehydrated = null;
-SUSPENDED_MARKER.retryLane = SyncLane;
+SUSPENDED_MARKER.retryLane = NoLane;
 
-function mountSuspenseOffscreenState(): any {
+// ---- suspense context stack (ReactFiberSuspenseContext) ----
+const SubtreeSuspenseContextMask = 1;
+const InvisibleParentSuspenseContext = 1;
+const ForceSuspenseFallback = 2;
+const suspenseCtxStack: any = new G.Array();
+let suspenseCtxCurrent = 0;
+
+function pushSuspenseContext(fiber: FiberNode, newContext: number): void {
+  suspenseCtxStack.push(suspenseCtxCurrent);
+  suspenseCtxCurrent = newContext;
+}
+
+function popSuspenseContext(fiber: FiberNode): void {
+  suspenseCtxCurrent = coerceInt(suspenseCtxStack.pop());
+}
+
+function shouldRemainOnFallback(suspenseContext: number, current: FiberNode | null): boolean {
+  if (current !== null) {
+    const suspenseState: any = current.memoizedState;
+    if (suspenseState === null) {
+      return false;
+    }
+  }
+  return (suspenseContext & ForceSuspenseFallback) !== 0;
+}
+
+function mountSuspenseOffscreenState(renderLanes: number): any {
   const s: any = mkObj();
-  s.baseLanes = NoLanes;
+  s.baseLanes = renderLanes;
+  return s;
+}
+
+function updateSuspenseOffscreenState(prevOffscreenState: any, renderLanes: number): any {
+  const s: any = mkObj();
+  s.baseLanes = coerceInt(prevOffscreenState.baseLanes) | renderLanes;
   return s;
 }
 
@@ -2239,7 +2261,7 @@ function mountSuspensePrimaryChildren(workInProgress: FiberNode, primaryChildren
   const primaryChildProps: any = mkObj();
   primaryChildProps.mode = 'visible';
   primaryChildProps.children = primaryChildren;
-  const primaryChildFragment = createFiberFromOffscreen(primaryChildProps, workInProgress.mode, renderLanes);
+  const primaryChildFragment = createFiberFromOffscreen(primaryChildProps, workInProgress.mode, NoLanes);
   primaryChildFragment.ret = workInProgress;
   workInProgress.child = primaryChildFragment;
   return primaryChildFragment;
@@ -2252,12 +2274,12 @@ function mountSuspenseFallbackChildren(workInProgress: FiberNode, primaryChildre
   primaryChildProps.children = primaryChildren;
   let primaryChildFragment: FiberNode;
   // legacy mode: reuse the progressed primary fragment from the first pass
-  if (progressedPrimaryFragment !== null) {
+  if ((workInProgress.mode & ConcurrentMode) === NoMode && progressedPrimaryFragment !== null) {
     primaryChildFragment = progressedPrimaryFragment;
     primaryChildFragment.childLanes = NoLanes;
     primaryChildFragment.pendingProps = primaryChildProps;
   } else {
-    primaryChildFragment = createFiberFromOffscreen(primaryChildProps, workInProgress.mode, renderLanes);
+    primaryChildFragment = createFiberFromOffscreen(primaryChildProps, workInProgress.mode, NoLanes);
   }
   const fallbackChildFragment = createFiberFromFragmentChildren(fallbackChildren, workInProgress.mode, renderLanes);
   primaryChildFragment.ret = workInProgress;
@@ -2274,8 +2296,10 @@ function updateSuspensePrimaryChildren(current: FiberNode, workInProgress: Fiber
   primaryChildProps.mode = 'visible';
   primaryChildProps.children = primaryChildren;
   const primaryChildFragment = createWorkInProgress(currentPrimaryChildFragment, primaryChildProps);
-  // legacy mode forces the primary tree to re-render
-  primaryChildFragment.lanes = renderLanes;
+  if ((workInProgress.mode & ConcurrentMode) === NoMode) {
+    // legacy mode forces the primary tree to re-render
+    primaryChildFragment.lanes = renderLanes;
+  }
   primaryChildFragment.ret = workInProgress;
   primaryChildFragment.sibling = null;
   if (currentFallbackChildFragment !== null) {
@@ -2302,7 +2326,8 @@ function updateSuspenseFallbackChildren(current: FiberNode, workInProgress: Fibe
   let primaryChildFragment: FiberNode;
   // legacy second pass: the primary fragment already progressed in the first
   // pass — reuse it and drop the deletion that pass recorded.
-  if (workInProgress.child !== currentPrimaryChildFragment && workInProgress.child !== null) {
+  if ((workInProgress.mode & ConcurrentMode) === NoMode &&
+      workInProgress.child !== currentPrimaryChildFragment && workInProgress.child !== null) {
     primaryChildFragment = workInProgress.child;
     primaryChildFragment.childLanes = NoLanes;
     primaryChildFragment.pendingProps = primaryChildProps;
@@ -2327,12 +2352,21 @@ function updateSuspenseFallbackChildren(current: FiberNode, workInProgress: Fibe
 
 function updateSuspenseComponent(current: FiberNode | null, workInProgress: FiberNode, renderLanes: number): FiberNode | null {
   const nextProps: any = workInProgress.pendingProps;
+  let suspenseContext = suspenseCtxCurrent;
   let showFallback = false;
   const didSuspend = (workInProgress.flags & DidCapture) !== NoFlags;
-  if (didSuspend) {
+  if (didSuspend || shouldRemainOnFallback(suspenseContext, current)) {
     showFallback = true;
     workInProgress.flags &= ~DidCapture;
+  } else {
+    // attempting the main content: mark that an invisible parent could take
+    // the fallback if this is a new mount or already showing a fallback
+    if (current === null || current.memoizedState !== null) {
+      suspenseContext = suspenseContext | InvisibleParentSuspenseContext;
+    }
   }
+  suspenseContext = suspenseContext & SubtreeSuspenseContextMask;
+  pushSuspenseContext(workInProgress, suspenseContext);
   if (current === null) {
     const nextPrimaryChildren: any = nextProps.children;
     const nextFallbackChildren: any = nextProps.fallback;
@@ -2340,7 +2374,7 @@ function updateSuspenseComponent(current: FiberNode | null, workInProgress: Fibe
       const fallbackFragment = mountSuspenseFallbackChildren(workInProgress, nextPrimaryChildren, nextFallbackChildren, renderLanes);
       const primaryChildFragment = workInProgress.child;
       if (primaryChildFragment !== null) {
-        primaryChildFragment.memoizedState = mountSuspenseOffscreenState();
+        primaryChildFragment.memoizedState = mountSuspenseOffscreenState(renderLanes);
       }
       workInProgress.memoizedState = SUSPENDED_MARKER;
       return fallbackFragment;
@@ -2353,7 +2387,9 @@ function updateSuspenseComponent(current: FiberNode | null, workInProgress: Fibe
     const prevOffscreenState: any = current.child !== null ? current.child.memoizedState : null;
     if (primaryChildFragment2 !== null) {
       primaryChildFragment2.memoizedState =
-        prevOffscreenState === null ? mountSuspenseOffscreenState() : prevOffscreenState;
+        prevOffscreenState === null
+          ? mountSuspenseOffscreenState(renderLanes)
+          : updateSuspenseOffscreenState(prevOffscreenState, renderLanes);
       primaryChildFragment2.childLanes = current.childLanes & ~renderLanes;
     }
     workInProgress.memoizedState = SUSPENDED_MARKER;
@@ -2367,13 +2403,46 @@ function updateSuspenseComponent(current: FiberNode | null, workInProgress: Fibe
 function updateOffscreenComponent(current: FiberNode | null, workInProgress: FiberNode, renderLanes: number): FiberNode | null {
   const nextProps: any = workInProgress.pendingProps;
   const nextChildren: any = nextProps.children;
+  const prevState: any = current !== null ? current.memoizedState : null;
   if (nextProps.mode === 'hidden') {
-    // legacy mode: no deferral — render children hidden
-    const nextState: any = mkObj();
-    nextState.baseLanes = NoLanes;
-    workInProgress.memoizedState = nextState;
+    if ((workInProgress.mode & ConcurrentMode) === NoMode) {
+      // legacy mode: no deferral — render children hidden now
+      const nextState: any = mkObj();
+      nextState.baseLanes = NoLanes;
+      workInProgress.memoizedState = nextState;
+      pushRenderLanes(workInProgress, renderLanes);
+    } else if ((renderLanes & OffscreenLane) === NoLanes) {
+      // hidden and not rendering at Offscreen priority: schedule this fiber
+      // to re-render at Offscreen priority, then bail out
+      let nextBaseLanes = renderLanes;
+      if (prevState !== null) {
+        nextBaseLanes = coerceInt(prevState.baseLanes) | renderLanes;
+      }
+      workInProgress.lanes = OffscreenLane;
+      workInProgress.childLanes = OffscreenLane;
+      const nextState2: any = mkObj();
+      nextState2.baseLanes = nextBaseLanes;
+      workInProgress.memoizedState = nextState2;
+      workInProgress.updateQueue = null;
+      pushRenderLanes(workInProgress, nextBaseLanes);
+      return null;
+    } else {
+      // second render, at Offscreen priority: resume the hidden tree
+      const nextState3: any = mkObj();
+      nextState3.baseLanes = NoLanes;
+      workInProgress.memoizedState = nextState3;
+      const hiddenSubtreeLanes = prevState !== null ? coerceInt(prevState.baseLanes) : renderLanes;
+      pushRenderLanes(workInProgress, hiddenSubtreeLanes);
+    }
   } else {
-    workInProgress.memoizedState = null;
+    // visible
+    let visibleSubtreeLanes = renderLanes;
+    if (prevState !== null) {
+      // going hidden -> visible: include the lanes skipped while hidden
+      visibleSubtreeLanes = coerceInt(prevState.baseLanes) | renderLanes;
+      workInProgress.memoizedState = null;
+    }
+    pushRenderLanes(workInProgress, visibleSubtreeLanes);
   }
   reconcileChildren(current, workInProgress, nextChildren, renderLanes);
   return workInProgress.child;
@@ -2415,6 +2484,41 @@ function updateHostComponent(current: FiberNode | null, workInProgress: FiberNod
   return workInProgress.child;
 }
 
+// React: attemptEarlyBailoutIfNoScheduledUpdate — re-push stack frames for
+// stackful fiber types, then bail out (with the Suspense/Offscreen special
+// cases that may re-enter the normal update path).
+function attemptEarlyBailoutIfNoScheduledUpdate(current: FiberNode, workInProgress: FiberNode, renderLanes: number): FiberNode | null {
+  const tag = workInProgress.tag;
+  if (tag === ContextProvider) {
+    const bailCtx: any = workInProgress.type._context;
+    pushProvider(workInProgress, bailCtx, workInProgress.memoizedProps.value);
+  } else if (tag === SuspenseComponent) {
+    const state: any = workInProgress.memoizedState;
+    if (state !== null) {
+      // currently timed out: retry the primary children, or skip to the
+      // fallback, depending on where the pending work is
+      const primaryChildFragment = workInProgress.child;
+      const primaryChildLanes = primaryChildFragment !== null ? primaryChildFragment.childLanes : NoLanes;
+      if ((renderLanes & primaryChildLanes) !== NoLanes) {
+        return updateSuspenseComponent(current, workInProgress, renderLanes);
+      }
+      pushSuspenseContext(workInProgress, suspenseCtxCurrent & SubtreeSuspenseContextMask);
+      const child = bailoutOnAlreadyFinishedWork(current, workInProgress, renderLanes);
+      if (child !== null) {
+        // work on the fallback, skipping the hidden primary children
+        return child.sibling;
+      }
+      return null;
+    }
+    pushSuspenseContext(workInProgress, suspenseCtxCurrent & SubtreeSuspenseContextMask);
+  } else if (tag === OffscreenComponent) {
+    // the deferral decision is identical to the normal update path
+    workInProgress.lanes = NoLanes;
+    return updateOffscreenComponent(current, workInProgress, renderLanes);
+  }
+  return bailoutOnAlreadyFinishedWork(current, workInProgress, renderLanes);
+}
+
 function beginWork(current: FiberNode | null, workInProgress: FiberNode, renderLanes: number): FiberNode | null {
   if (current !== null) {
     const oldProps: any = current.memoizedProps;
@@ -2425,13 +2529,7 @@ function beginWork(current: FiberNode | null, workInProgress: FiberNode, renderL
       if ((current.lanes & renderLanes) === NoLanes &&
           (workInProgress.flags & DidCapture) === NoFlags) {
         didReceiveUpdate = false;
-        // React: attemptEarlyBailoutIfNoScheduledUpdate re-pushes stack
-        // frames for stackful fiber types before bailing out.
-        if (workInProgress.tag === ContextProvider) {
-          const bailCtx: any = workInProgress.type._context;
-          pushProvider(workInProgress, bailCtx, workInProgress.memoizedProps.value);
-        }
-        return bailoutOnAlreadyFinishedWork(current, workInProgress, renderLanes);
+        return attemptEarlyBailoutIfNoScheduledUpdate(current, workInProgress, renderLanes);
       }
       if ((current.flags & ForceUpdateForLegacySuspense) !== NoFlags) {
         // legacy suspense forced re-render of the suspended component
@@ -2512,32 +2610,117 @@ function attachRetryListener(suspenseBoundary: FiberNode, wakeable: any): void {
   }
 }
 
+// React: resetSuspendedComponent — legacy quirk: restore the suspended hook
+// component's pre-render state so the incomplete fiber commits as-is.
+function resetSuspendedComponent(sourceFiber: FiberNode): void {
+  const tag = sourceFiber.tag;
+  if ((sourceFiber.mode & ConcurrentMode) === NoMode &&
+      (tag === FunctionComponent || tag === ForwardRef || tag === SimpleMemoComponent)) {
+    const currentSource = sourceFiber.alternate;
+    if (currentSource !== null) {
+      sourceFiber.updateQueue = currentSource.updateQueue;
+      sourceFiber.memoizedState = currentSource.memoizedState;
+      sourceFiber.lanes = currentSource.lanes;
+    } else {
+      sourceFiber.updateQueue = null;
+      sourceFiber.memoizedState = null;
+    }
+  }
+}
+
+function markSuspenseBoundaryShouldCapture(suspenseBoundary: FiberNode, returnFiber: FiberNode | null, sourceFiber: FiberNode, root: FiberRootNode, rootRenderLanes: number): FiberNode {
+  if ((suspenseBoundary.mode & ConcurrentMode) === NoMode) {
+    // legacy: pretend the suspended component rendered null and keep going;
+    // the boundary does a second (fallback) pass when it completes
+    if (suspenseBoundary === returnFiber) {
+      // suspended while reconciling the boundary's inner Offscreen wrapper:
+      // nothing partially rendered, use the concurrent capture behavior
+      suspenseBoundary.flags |= ShouldCapture;
+    } else {
+      suspenseBoundary.flags |= DidCapture;
+      sourceFiber.flags |= ForceUpdateForLegacySuspense;
+      // commit the incomplete fiber as-is (no lifecycles)
+      sourceFiber.flags &= ~(LifecycleEffectMask | Incomplete);
+      sourceFiber.lanes |= SyncLane;
+    }
+    return suspenseBoundary;
+  }
+  // concurrent capture: unwind to the boundary and render the fallback
+  suspenseBoundary.flags |= ShouldCapture;
+  suspenseBoundary.lanes = rootRenderLanes;
+  return suspenseBoundary;
+}
+
+// ---- ping listeners (concurrent only) ----
+function attachPingListener(root: FiberRootNode, wakeable: any, lanes: number): void {
+  let pingCache: any = root.pingCache;
+  let threadIDs: any;
+  if (pingCache === null) {
+    pingCache = new G.Map();
+    root.pingCache = pingCache;
+    threadIDs = new G.Set();
+    pingCache.set(wakeable, threadIDs);
+  } else {
+    threadIDs = pingCache.get(wakeable);
+    if (threadIDs === undefined) {
+      threadIDs = new G.Set();
+      pingCache.set(wakeable, threadIDs);
+    }
+  }
+  if (!threadIDs.has(lanes)) {
+    threadIDs.add(lanes);
+    const ping: any = function (): void {
+      pingSuspendedRoot(root, wakeable, lanes);
+    };
+    wakeable.then(ping, ping);
+  }
+}
+
+function pingSuspendedRoot(root: FiberRootNode, wakeable: any, pingedLanes: number): void {
+  const pingCache: any = root.pingCache;
+  if (pingCache !== null) {
+    pingCache.delete(wakeable);
+  }
+  const eventTime = requestEventTime();
+  markRootPinged(root, pingedLanes);
+  if (workInProgressRoot === root && isSubsetOfLanes(workInProgressRootRenderLanes, pingedLanes)) {
+    // pinged at the priority we're currently rendering: maybe restart
+    if (workInProgressRootExitStatus === RootSuspendedWithDelay ||
+        (workInProgressRootExitStatus === RootSuspended &&
+         includesOnlyRetries(workInProgressRootRenderLanes) &&
+         schedGetNow() - globalMostRecentFallbackTime < FALLBACK_THROTTLE_MS)) {
+      prepareFreshStack(root, NoLanes);
+    } else {
+      workInProgressRootPingedLanes |= pingedLanes;
+    }
+  }
+  ensureRootIsScheduled(root, eventTime);
+}
+
 function throwException(root: FiberRootNode, returnFiber: FiberNode | null, sourceFiber: FiberNode, value: any, rootRenderLanes: number): void {
   sourceFiber.flags |= Incomplete;
   if (value !== null && typeof value === 'object' && typeof value.then === 'function') {
     const wakeable: any = value;
-    resetHooksAfterThrow(sourceFiber);
+    resetSuspendedComponent(sourceFiber);
     const suspenseBoundary = getNearestSuspenseBoundaryToCapture(returnFiber);
     if (suspenseBoundary !== null) {
+      markSuspenseBoundaryShouldCapture(suspenseBoundary, returnFiber, sourceFiber, root, rootRenderLanes);
+      // ping listeners only in concurrent mode: legacy always commits
+      // fallbacks synchronously, so there are no pings
       if ((suspenseBoundary.mode & ConcurrentMode) !== NoMode) {
-        // concurrent capture (ping listeners, retry lanes) arrives with the
-        // concurrent-Suspense milestone
-        throw new Error('suspension under a concurrent root is not ported yet');
-      }
-      // legacy (NoMode) capture: markSuspenseBoundaryShouldCapture
-      if (suspenseBoundary === returnFiber) {
-        suspenseBoundary.flags |= ShouldCapture;
-      } else {
-        suspenseBoundary.flags |= DidCapture;
-        sourceFiber.flags |= ForceUpdateForLegacySuspense;
-        // commit the incomplete fiber as-is
-        sourceFiber.flags &= ~(LifecycleEffectMask | Incomplete);
-        sourceFiber.lanes |= SyncLane;
+        attachPingListener(root, wakeable, rootRenderLanes);
       }
       attachRetryListener(suspenseBoundary, wakeable);
       return;
     }
-    throw new Error('a component suspended with no Suspense boundary above it');
+    // no boundary found
+    if (!includesSyncLane(rootRenderLanes)) {
+      // not a sync update: suspend the whole root, wait for data
+      attachPingListener(root, wakeable, rootRenderLanes);
+      renderDidSuspendDelayIfPossible();
+      return;
+    }
+    throw new Error('a component suspended while responding to synchronous input with no Suspense boundary above it');
   }
   // no error boundaries in this port
   throw value;
@@ -2550,11 +2733,16 @@ function unwindWork(current: FiberNode | null, workInProgress: FiberNode): Fiber
     return null;
   }
   if (tag === SuspenseComponent) {
+    popSuspenseContext(workInProgress);
     const flags = workInProgress.flags;
     if ((flags & ShouldCapture) !== NoFlags) {
       workInProgress.flags = (flags & ~ShouldCapture) | DidCapture;
       return workInProgress;
     }
+    return null;
+  }
+  if (tag === OffscreenComponent) {
+    popRenderLanes(workInProgress);
     return null;
   }
   return null;
@@ -2783,11 +2971,12 @@ function completeWork(current: FiberNode | null, workInProgress: FiberNode): Fib
     return null;
   }
   if (tag === SuspenseComponent) {
+    popSuspenseContext(workInProgress);
     const nextState: any = workInProgress.memoizedState;
     if ((workInProgress.flags & DidCapture) !== NoFlags) {
-      // legacy: the boundary captured mid-complete — re-render it to show
-      // the fallback. Don't bubble; don't reset the effect list.
-      workInProgress.lanes = SyncLane;
+      // the boundary captured mid-complete — re-render it to show the
+      // fallback. Don't bubble; don't reset the effect list.
+      workInProgress.lanes = subtreeRenderLanes;
       return workInProgress;
     }
     const nextDidTimeout = nextState !== null;
@@ -2797,6 +2986,18 @@ function completeWork(current: FiberNode | null, workInProgress: FiberNode): Fib
         const offscreenFiber = workInProgress.child;
         if (offscreenFiber !== null) {
           offscreenFiber.flags |= Visibility;
+        }
+        if ((workInProgress.mode & ConcurrentMode) !== NoMode) {
+          // decide whether the whole render should suspend the commit
+          const hasInvisibleChildContext = current === null;
+          if (hasInvisibleChildContext ||
+              (suspenseCtxCurrent & InvisibleParentSuspenseContext) !== 0) {
+            // in an invisible tree or a new render: showing this fallback is ok
+            renderDidSuspend();
+          } else {
+            // we would be hiding visible content: suspend longer if possible
+            renderDidSuspendDelayIfPossible();
+          }
         }
       }
     }
@@ -2808,6 +3009,7 @@ function completeWork(current: FiberNode | null, workInProgress: FiberNode): Fib
     return null;
   }
   if (tag === OffscreenComponent) {
+    popRenderLanes(workInProgress);
     const nextStateO: any = workInProgress.memoizedState;
     const nextIsHidden = nextStateO !== null;
     if (current !== null) {
@@ -2816,8 +3018,21 @@ function completeWork(current: FiberNode | null, workInProgress: FiberNode): Fib
         workInProgress.flags |= Visibility;
       }
     }
-    // legacy mode always bubbles
-    bubbleProperties(workInProgress);
+    if (!nextIsHidden || (workInProgress.mode & ConcurrentMode) === NoMode) {
+      bubbleProperties(workInProgress);
+    } else {
+      // hidden concurrent tree: only bubble when rendering at Offscreen
+      // priority
+      if ((subtreeRenderLanes & OffscreenLane) !== NoLanes) {
+        bubbleProperties(workInProgress);
+        if (supportsMutation) {
+          // insertions/updates inside the hidden subtree must be re-hidden
+          if ((workInProgress.subtreeFlags & (Placement | Update)) !== NoFlags) {
+            workInProgress.flags |= Visibility;
+          }
+        }
+      }
+    }
     return null;
   }
   bubbleProperties(workInProgress);
@@ -2961,6 +3176,12 @@ function commitHookEffectListMount(flags: number, finishedWork: FiberNode): void
   }
 }
 
+// Whether the subtree being committed is inside a hidden (or being-hidden)
+// Offscreen tree; gates layout-effect mounts, ref attach/detach, and
+// deletion-time layout destroys (their effects already disappeared).
+let offscreenSubtreeIsHidden = false;
+let offscreenSubtreeWasHidden = false;
+
 // React's deletion pass destroys insertion/layout effects inline (parent ->
 // child order), WITHOUT clearing effect.destroy — passive destroys for the
 // same fibers run later, in the passive-unmount pass.
@@ -2988,9 +3209,32 @@ function commitDeletionHookEffects(deletedFiber: FiberNode): void {
 
 function commitDeletionEffectsOnFiber(deletedFiber: FiberNode, hostParent: any): void {
   const tag = deletedFiber.tag;
+  if (tag === OffscreenComponent) {
+    if ((deletedFiber.mode & ConcurrentMode) !== NoMode) {
+      // if this tree is hidden its effects already disappeared — don't
+      // unmount them again below
+      const prevWasHiddenDel = offscreenSubtreeWasHidden;
+      offscreenSubtreeWasHidden = prevWasHiddenDel || deletedFiber.memoizedState !== null;
+      let childDel = deletedFiber.child;
+      while (childDel !== null) {
+        commitDeletionEffectsOnFiber(childDel, hostParent);
+        childDel = childDel.sibling;
+      }
+      offscreenSubtreeWasHidden = prevWasHiddenDel;
+    } else {
+      let childDel2 = deletedFiber.child;
+      while (childDel2 !== null) {
+        commitDeletionEffectsOnFiber(childDel2, hostParent);
+        childDel2 = childDel2.sibling;
+      }
+    }
+    return;
+  }
   if (tag === HostComponent || tag === HostText) {
     if (tag === HostComponent) {
-      safelyDetachRef(deletedFiber);
+      if (!offscreenSubtreeWasHidden) {
+        safelyDetachRef(deletedFiber);
+      }
     }
     if (supportsMutation) {
       let inner = deletedFiber.child;
@@ -3011,7 +3255,9 @@ function commitDeletionEffectsOnFiber(deletedFiber: FiberNode, hostParent: any):
     return;
   }
   if (tag === FunctionComponent || tag === SimpleMemoComponent || tag === ForwardRef) {
-    commitDeletionHookEffects(deletedFiber);
+    if (!offscreenSubtreeWasHidden) {
+      commitDeletionHookEffects(deletedFiber);
+    }
   }
   let child = deletedFiber.child;
   while (child !== null) {
@@ -3048,6 +3294,16 @@ function commitReconciliationEffects(finishedWork: FiberNode): void {
 
 function commitMutationEffectsOnFiber(finishedWork: FiberNode, root: FiberRootNode): void {
   const current = finishedWork.alternate;
+  // an Offscreen fiber that is (or was) hidden traverses its subtree with
+  // offscreenSubtreeWasHidden set, so already-disappeared effects are not
+  // unmounted a second time
+  const isConcurrentOffscreen = finishedWork.tag === OffscreenComponent &&
+    (finishedWork.mode & ConcurrentMode) !== NoMode;
+  let savedWasHidden = false;
+  if (isConcurrentOffscreen) {
+    savedWasHidden = offscreenSubtreeWasHidden;
+    offscreenSubtreeWasHidden = savedWasHidden || (current !== null && current.memoizedState !== null);
+  }
   // recursivelyTraverseMutationEffects — deletions persist on the fiber for
   // the passive-unmount pass (React clears them during flushPassiveEffects).
   const deletions: any = finishedWork.deletions;
@@ -3062,6 +3318,9 @@ function commitMutationEffectsOnFiber(finishedWork: FiberNode, root: FiberRootNo
       commitMutationEffectsOnFiber(child, root);
       child = child.sibling;
     }
+  }
+  if (isConcurrentOffscreen) {
+    offscreenSubtreeWasHidden = savedWasHidden;
   }
   commitReconciliationEffects(finishedWork);
   const tag = finishedWork.tag;
@@ -3106,6 +3365,17 @@ function commitMutationEffectsOnFiber(finishedWork: FiberNode, root: FiberRootNo
     return;
   }
   if (tag === SuspenseComponent) {
+    const offscreenFiber = finishedWork.child;
+    if (offscreenFiber !== null && (offscreenFiber.flags & Visibility) !== NoFlags) {
+      const suspIsHidden = offscreenFiber.memoizedState !== null;
+      if (suspIsHidden) {
+        const suspWasHidden = offscreenFiber.alternate !== null && offscreenFiber.alternate.memoizedState !== null;
+        if (!suspWasHidden) {
+          // a new fallback committed: start the retry throttle window
+          markCommitTimeOfFallback();
+        }
+      }
+    }
     if ((finishedWork.flags & Update) !== NoFlags) {
       attachSuspenseRetryListeners(finishedWork);
     }
@@ -3114,11 +3384,43 @@ function commitMutationEffectsOnFiber(finishedWork: FiberNode, root: FiberRootNo
   if (tag === OffscreenComponent) {
     if ((finishedWork.flags & Visibility) !== NoFlags) {
       const isHidden = finishedWork.memoizedState !== null;
+      if (isHidden) {
+        const wasHidden = current !== null && current.memoizedState !== null;
+        if (!wasHidden && (finishedWork.mode & ConcurrentMode) !== NoMode) {
+          // going hidden: disconnect the subtree's layout effects and refs
+          let oc = finishedWork.child;
+          while (oc !== null) {
+            disappearLayoutEffectsWalk(oc);
+            oc = oc.sibling;
+          }
+        }
+      }
       if (supportsMutation) {
         hideOrUnhideAllChildren(finishedWork, isHidden);
       }
     }
     return;
+  }
+}
+
+// pre-order unmount of ALL layout effects + host ref detach in a subtree
+// that is being hidden (React: disappearLayoutEffects)
+function disappearLayoutEffectsWalk(node: FiberNode): void {
+  const tag = node.tag;
+  if (tag === FunctionComponent || tag === SimpleMemoComponent || tag === ForwardRef || tag === MemoComponent) {
+    commitHookEffectListUnmount(HookLayout, node);
+  } else if (tag === HostComponent) {
+    safelyDetachRef(node);
+  } else if (tag === OffscreenComponent) {
+    if (node.memoizedState !== null) {
+      // nested tree is already hidden: its effects already disappeared
+      return;
+    }
+  }
+  let child = node.child;
+  while (child !== null) {
+    disappearLayoutEffectsWalk(child);
+    child = child.sibling;
   }
 }
 
@@ -3193,24 +3495,85 @@ function hideOrUnhideAllChildren(finishedWork: FiberNode, isHidden: boolean): vo
 }
 
 // ---- commit (layout phase) ----
-function commitLayoutEffects(finishedWork: FiberNode): void {
-  if ((finishedWork.subtreeFlags & LayoutMask) !== NoFlags) {
-    let child = finishedWork.child;
+// post-order remount of ALL layout effects + host ref attach in a subtree
+// that is reappearing (React: reappearLayoutEffects)
+function reappearLayoutEffectsWalk(node: FiberNode): void {
+  const skipChildren = node.tag === OffscreenComponent && node.memoizedState !== null;
+  if (!skipChildren) {
+    let child = node.child;
     while (child !== null) {
-      commitLayoutEffects(child);
+      reappearLayoutEffectsWalk(child);
       child = child.sibling;
     }
   }
-  if ((finishedWork.flags & LayoutMask) !== NoFlags) {
-    const tag = finishedWork.tag;
-    if (tag === FunctionComponent || tag === SimpleMemoComponent || tag === ForwardRef) {
+  const tag = node.tag;
+  if (tag === FunctionComponent || tag === SimpleMemoComponent || tag === ForwardRef) {
+    commitHookEffectListMount(HookLayout, node);
+  } else if (tag === HostComponent) {
+    commitAttachRef(node);
+  }
+}
+
+function commitLayoutEffectOnFiberPort(finishedWork: FiberNode): void {
+  if ((finishedWork.flags & LayoutMask) === NoFlags) {
+    return;
+  }
+  const tag = finishedWork.tag;
+  if (tag === FunctionComponent || tag === SimpleMemoComponent || tag === ForwardRef) {
+    if (!offscreenSubtreeWasHidden) {
       commitHookEffectListMount(HookLayout | HookHasEffect, finishedWork);
-    } else if (tag === HostComponent) {
-      if ((finishedWork.flags & Ref) !== NoFlags) {
-        commitAttachRef(finishedWork);
-      }
     }
   }
+  if (!offscreenSubtreeWasHidden) {
+    if ((finishedWork.flags & Ref) !== NoFlags && tag === HostComponent) {
+      commitAttachRef(finishedWork);
+    }
+  }
+}
+
+function commitLayoutEffects(finishedWork: FiberNode): void {
+  const isModernRoot = (finishedWork.mode & ConcurrentMode) !== NoMode;
+  commitLayoutEffectsTree(finishedWork, isModernRoot);
+}
+
+function commitLayoutEffectsTree(fiber: FiberNode, isModernRoot: boolean): void {
+  if (fiber.tag === OffscreenComponent && isModernRoot) {
+    const isHidden = fiber.memoizedState !== null;
+    const newIsHidden = isHidden || offscreenSubtreeIsHidden;
+    if (newIsHidden) {
+      // hidden subtree: skip its layout effects entirely
+      commitLayoutEffectOnFiberPort(fiber);
+      return;
+    }
+    const currentO = fiber.alternate;
+    const wasHidden = currentO !== null && currentO.memoizedState !== null;
+    const newWasHidden = wasHidden || offscreenSubtreeWasHidden;
+    const prevIsHidden = offscreenSubtreeIsHidden;
+    const prevWasHidden = offscreenSubtreeWasHidden;
+    offscreenSubtreeIsHidden = newIsHidden;
+    offscreenSubtreeWasHidden = newWasHidden;
+    if (offscreenSubtreeWasHidden && !prevWasHidden) {
+      // root of a reappearing boundary: turn its layout effects back on
+      reappearLayoutEffectsWalk(fiber);
+    }
+    let childO = fiber.child;
+    while (childO !== null) {
+      commitLayoutEffectsTree(childO, isModernRoot);
+      childO = childO.sibling;
+    }
+    offscreenSubtreeIsHidden = prevIsHidden;
+    offscreenSubtreeWasHidden = prevWasHidden;
+    commitLayoutEffectOnFiberPort(fiber);
+    return;
+  }
+  if ((fiber.subtreeFlags & LayoutMask) !== NoFlags) {
+    let child = fiber.child;
+    while (child !== null) {
+      commitLayoutEffectsTree(child, isModernRoot);
+      child = child.sibling;
+    }
+  }
+  commitLayoutEffectOnFiberPort(fiber);
 }
 
 // ---- commit (passive phase) ----
@@ -3587,10 +3950,10 @@ function finishConcurrentRender(root: FiberRootNode, exitStatus: number, lanes: 
           markRootPinged(root, suspendedLanes);
           return;
         }
-        // React schedules a host timeout to commit the fallback later; host
-        // timeouts never fire in the deterministic harness, so this state
-        // means the driver forgot to advance the clock — fail loudly.
-        throw new Error('retry suspended inside the fallback throttle window: driver must advance the clock');
+        // React arms a host timeout to commit the fallback later. Host
+        // timeouts never fire in this harness (scheduleTimeout returns -1 on
+        // the twin), so waiting for the data ping IS the behavior.
+        return;
       }
     }
     commitRoot(root);
@@ -3606,7 +3969,9 @@ function finishConcurrentRender(root: FiberRootNode, exitStatus: number, lanes: 
     const timeElapsedMs = schedGetNow() - mostRecentEventTime;
     const msUntilTimeout2 = jnd(timeElapsedMs) - timeElapsedMs;
     if (msUntilTimeout2 > 10) {
-      throw new Error('suspended-with-delay inside the JND window: driver must advance the clock');
+      // React arms a host timeout to commit the placeholder after the JND
+      // delay. Host timeouts never fire in this harness, so wait for the ping.
+      return;
     }
     commitRoot(root);
     return;
@@ -3687,13 +4052,24 @@ function discreteUpdatesImpl(fn: any): any {
 }
 
 // ---- render ----
+function pushRenderLanes(fiber: FiberNode, lanes: number): void {
+  subtreeRenderLanesStack.push(subtreeRenderLanes);
+  subtreeRenderLanes |= lanes;
+}
+
+function popRenderLanes(fiber: FiberNode): void {
+  subtreeRenderLanes = coerceInt(subtreeRenderLanesStack.pop());
+}
+
 function unwindInterruptedWork(current: FiberNode | null, interruptedWork: FiberNode): void {
   const tag = interruptedWork.tag;
   if (tag === ContextProvider) {
     popProvider(interruptedWork.type._context, interruptedWork);
+  } else if (tag === SuspenseComponent) {
+    popSuspenseContext(interruptedWork);
+  } else if (tag === OffscreenComponent) {
+    popRenderLanes(interruptedWork);
   }
-  // host-context/suspense-context stacks are not modeled; Offscreen
-  // render-lane pops arrive with concurrent Suspense
 }
 
 function prepareFreshStack(root: FiberRootNode, lanes: number): FiberNode {
@@ -3714,6 +4090,8 @@ function prepareFreshStack(root: FiberRootNode, lanes: number): FiberNode {
   workInProgressRootRenderLanes = lanes;
   subtreeRenderLanes = lanes;
   subtreeRenderLanesStack.length = 0;
+  suspenseCtxStack.length = 0;
+  suspenseCtxCurrent = 0;
   workInProgressRootExitStatus = RootInProgress;
   workInProgressRootSkippedLanes = NoLanes;
   workInProgressRootInterleavedUpdatedLanes = NoLanes;
@@ -3726,6 +4104,7 @@ function prepareFreshStack(root: FiberRootNode, lanes: number): FiberNode {
 // boundary, then complete the errored unit (which may take the unwind path).
 function handleThrow(root: FiberRootNode, thrownValue: any): void {
   const erroredWork = workInProgress;
+  resetHooksAfterThrow();
   if (erroredWork === null || erroredWork.ret === null) {
     workInProgressRootExitStatus = RootFatalErrored;
     workInProgress = null;

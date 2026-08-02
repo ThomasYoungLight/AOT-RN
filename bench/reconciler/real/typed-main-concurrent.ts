@@ -9,6 +9,8 @@ function runConcurrentHarness(): void {
   RA.memo = memoImpl;
   RA.useTransition = useTransitionImpl;
   RA.useDeferredValue = useDeferredValueImpl;
+  RA.lazy = lazyImpl;
+  RA.Suspense = SuspenseType;
 
   const appApi: any = installConcurrentApp(RA);
 

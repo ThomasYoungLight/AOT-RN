@@ -130,6 +130,46 @@ def main():
                  "The typed port and the real reconciler diverged — do NOT ship this registry.")
     print(f"GATE OK: typed port == real reconciler (checksum {typed_sum})")
 
+    step(4.5, "equivalence gate (concurrent root: host + fx + sched trace)")
+    def extract_concurrent(output, who):
+        vals = []
+        for pat in (r"checksum=(\d+)", r"fx=(-?\d+)", r"sched=(\d+)"):
+            m2 = re.search(pat, output)
+            if not m2:
+                sys.exit(f"GATE FAIL: no {pat} in {who} output:\n{output[-500:]}")
+            vals.append(m2.group(1))
+        return "/".join(vals)
+    run(["bash", str(REAL / "build-real-concurrent.sh")])
+    cc_twin_out = run([str(H / "build_release" / "bin" / "hermes"),
+                       "-O", str(REAL / "real-react-concurrent-bundle.js")], capture=True)
+    cc_twin_sum = extract_concurrent(cc_twin_out, "concurrent JS twin")
+    run(["bash", str(REAL / "build-typed-concurrent.sh")])
+    cc_bin = SCRATCH / "typed-concurrent-gate"
+    run([str(H / "build_release" / "bin" / "shermes"),
+         "-typed", "-O", "-o", str(cc_bin), str(REAL / "typed-entry-concurrent.ts")])
+    cc_typed_out = run([str(cc_bin)], capture=True)
+    cc_typed_sum = extract_concurrent(cc_typed_out, "concurrent typed port")
+    if cc_typed_sum != cc_twin_sum:
+        sys.exit(f"GATE FAIL: concurrent typed {cc_typed_sum} != twin {cc_twin_sum}\n"
+                 "Concurrent lanes/scheduling diverged — do NOT ship this registry.")
+    print(f"GATE OK: concurrent root equivalent (checksum/fx/sched {cc_typed_sum})")
+
+    # concurrent + persistence (Fabric-shaped): what a new-arch ring 0 runs
+    run(["bash", str(REAL / "build-real-concurrent-persistent.sh")])
+    ccp_twin_out = run([str(H / "build_release" / "bin" / "hermes"),
+                        "-O", str(REAL / "real-react-concurrent-persistent-bundle.js")], capture=True)
+    ccp_twin_sum = extract_concurrent(ccp_twin_out, "concurrent persistent JS twin")
+    run(["bash", str(REAL / "build-typed-concurrent-persistent.sh")])
+    ccp_bin = SCRATCH / "typed-concurrent-persistent-gate"
+    run([str(H / "build_release" / "bin" / "shermes"),
+         "-typed", "-O", "-o", str(ccp_bin), str(REAL / "typed-entry-concurrent-persistent.ts")])
+    ccp_typed_out = run([str(ccp_bin)], capture=True)
+    ccp_typed_sum = extract_concurrent(ccp_typed_out, "concurrent persistent typed port")
+    if ccp_typed_sum != ccp_twin_sum:
+        sys.exit(f"GATE FAIL: concurrent persistent typed {ccp_typed_sum} != twin {ccp_twin_sum}\n"
+                 "Concurrent persistence (Fabric-shaped) diverged — do NOT ship this registry.")
+    print(f"GATE OK: concurrent persistent equivalent (checksum/fx/sched {ccp_typed_sum})")
+
     if "--install-android" in sys.argv:
         step(5, "Android release build + install")
         run(["./gradlew", ":packages:rn-tester:android:app:installRelease",
